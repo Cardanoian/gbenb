@@ -32,13 +32,9 @@ class LangChainService:
             # 5. AI 응답 생성
             answer = self.openai_service.generate_response(messages)
 
-            # 6. 신뢰도 계산
-            confidence = self._calculate_confidence(search_results)
-
             return {
                 "answer": answer,
                 "sources": search_results,
-                "confidence": confidence,
                 "context_used": len(search_results) > 0,
             }
 
@@ -47,7 +43,6 @@ class LangChainService:
             return {
                 "answer": "죄송합니다. 요청을 처리하는 중 오류가 발생했습니다.",
                 "sources": [],
-                "confidence": 0,
                 "context_used": False,
             }
 
@@ -63,18 +58,6 @@ class LangChainService:
             context_parts.append(f"[{source}] {content}")
 
         return "\n\n".join(context_parts)
-
-    def _calculate_confidence(self, search_results: List[Dict[str, Any]]) -> int:
-        """검색 결과 기반 신뢰도 계산"""
-        if not search_results:
-            return 0
-
-        # 평균 유사도 점수 계산
-        scores = [result.get("score", 0) for result in search_results]
-        avg_score = sum(scores) / len(scores) if scores else 0
-
-        # 0-100 범위로 변환
-        return min(100, int(avg_score * 100))
 
     def _get_system_prompt(self) -> str:
         """시스템 프롬프트 반환"""

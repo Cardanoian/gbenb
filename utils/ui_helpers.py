@@ -10,8 +10,22 @@ def apply_custom_css():
         """
     <style>
     /* 전역 스타일 */
+    html, body {
+        height: 100%;
+        margin: 0;
+        overflow: hidden; /* 전체 스크롤 방지 */
+    }
+    .stApp {
+        height: 100vh; /* 뷰포트 높이에 맞춤 */
+        display: flex;
+        flex-direction: column; /* 자식 요소를 세로로 정렬 */
+    }
     .main {
         padding: 0rem 1rem;
+        flex: 1; /* 남은 공간을 모두 차지 */
+        overflow: hidden; /* 내부 스크롤을 위해 외부 스크롤 방지 */
+        display: flex; /* 내부 컨텐츠를 위한 flex */
+        flex-direction: column; /* 내부 컨텐츠 세로 정렬 */
     }
     
     /* 헤더 스타일 */
@@ -22,6 +36,7 @@ def apply_custom_css():
         margin: -1rem -1rem 2rem -1rem;
         border-radius: 0 0 20px 20px;
         box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+        flex-shrink: 0; /* 높이 고정 */
     }
     
     .header-content {
@@ -52,10 +67,10 @@ def apply_custom_css():
         border-radius: 20px;
         box-shadow: 0 10px 40px rgba(0,0,0,0.1);
         padding: 1.5rem;
-        margin-bottom: 1rem;
-        min-height: 500px;
-        max-height: 600px;
-        overflow-y: auto;
+        margin-bottom: 1rem; /* 입력 영역과의 간격 유지 */
+        flex: 1 1 auto; /* 남은 공간을 채우고, 필요시 축소/확장 */
+        min-height: 0; /* flex 아이템의 최소 높이 재정의 */
+        overflow-y: auto; /* 내용이 넘칠 경우 스크롤 */
     }
     
     /* 메시지 버블 */
@@ -106,19 +121,6 @@ def apply_custom_css():
         border-radius: 10px;
         font-size: 0.9rem;
     }
-    
-    .confidence-badge {
-        display: inline-block;
-        padding: 0.2rem 0.6rem;
-        border-radius: 15px;
-        font-size: 0.8rem;
-        font-weight: bold;
-        margin-top: 0.5rem;
-    }
-    
-    .confidence-high { background: rgba(76, 175, 80, 0.8); }
-    .confidence-medium { background: rgba(255, 193, 7, 0.8); }
-    .confidence-low { background: rgba(244, 67, 54, 0.8); }
     
     /* 환영 메시지 */
     .welcome-message {
@@ -171,12 +173,13 @@ def apply_custom_css():
     }
     
     /* 입력 영역 */
-    .input-container {
+    .stForm {
         background: white;
         border-radius: 15px;
         box-shadow: 0 5px 20px rgba(0,0,0,0.1);
         padding: 1rem;
-        margin-top: 1rem;
+        margin-top: 1rem; /* 채팅 컨테이너와의 간격 유지 */
+        flex-shrink: 0; /* 높이 고정 */
     }
     
     /* 사이드바 스타일 */
@@ -374,133 +377,45 @@ def render_message_bubble(message: ChatMessage):
     # 시간 포맷팅
     time_str = message.timestamp.strftime("%H:%M")
 
-    # 신뢰도 배지 설정
-    confidence_class = ""
-    confidence_text = ""
-    if message.confidence is not None:
-        if message.confidence >= 80:
-            confidence_class = "confidence-high"
-            confidence_text = f"신뢰도: {message.confidence}% (높음)"
-        elif message.confidence >= 60:
-            confidence_class = "confidence-medium"
-            confidence_text = f"신뢰도: {message.confidence}% (보통)"
-        else:
-            confidence_class = "confidence-low"
-            confidence_text = f"신뢰도: {message.confidence}% (낮음)"
-
     # 출처 정보 포맷팅
     sources_html = ""
-    if message.sources and len(message.sources) > 0:
+    if message.sources and len(message.sources) > 0 and message.role == "assistant":
         sources_html = "<div class='message-sources'>"
         sources_html += "<strong>📚 참고 자료:</strong><br>"
+        import os
+        import re
+
         for i, source in enumerate(message.sources[:3], 1):
             source_name = source.get("metadata", {}).get("source", f"문서 {i}")
-            sources_html += f"• {source_name}<br>"
+            # 파일명(확장자 제거) 추출
+            base_name = os.path.basename(source_name)
+            file_name: str = os.path.splitext(base_name)[0]
+            if "_" in file_name:
+                file_name = file_name.split("_")[1].strip()
+            # 페이지 정보 추출 (예: p.23)
+            page = source.get("metadata", {}).get("page", None)
+            # 만약 page 정보가 없고, source_name에 p.숫자 패턴이 있으면 추출
+            if not page:
+                m = re.search(r"p\.\d+", source_name)
+                page = m.group(0) if m else ""
+            else:
+                page = f"p.{int(page)+1}"
+            # 최종 표기: 파일이름 p.23
+            if page:
+                display = f"{file_name} {page }"
+            else:
+                display = file_name
+            sources_html += f"• {display}<br>"
         sources_html += "</div>"
-
-    # 신뢰도 배지
-    confidence_html = ""
-    if confidence_text:
-        confidence_html = (
-            f"<div class='confidence-badge {confidence_class}'>{confidence_text}</div>"
-        )
 
     # 메시지 HTML 생성
     st.markdown(
-        f"""
-    <div class="message-bubble {message.role}">
-        <div class="message-content {message.role}">
-            {message.content}
-            <div class="message-timestamp">{time_str}</div>
-            {confidence_html}
-            {sources_html}
-        </div>
+        f"""<div class="message-bubble {message.role}">
+    <div class="message-content {message.role}">
+        {message.content}
+        {sources_html if message.role == "assistant" else "<div></div>"}
+        <div class="message-timestamp">{time_str}</div>
     </div>
-    """,
+</div>""",
         unsafe_allow_html=True,
     )
-
-
-def render_sidebar():
-    """사이드바 렌더링"""
-    st.markdown(
-        """
-    <div class="sidebar-section">
-        <h3>🔗 연결 상태</h3>
-    </div>
-    """,
-        unsafe_allow_html=True,
-    )
-
-    # 데이터베이스 상태
-    db_status = st.session_state.get("database_status", "disconnected")
-    if db_status == "connected":
-        st.markdown(
-            """
-        <div class="status-badge status-connected">
-            ✅ 데이터베이스 연결됨
-        </div>
-        """,
-            unsafe_allow_html=True,
-        )
-    else:
-        st.markdown(
-            """
-        <div class="status-badge status-error">
-            ❌ 데이터베이스 오류
-        </div>
-        """,
-            unsafe_allow_html=True,
-        )
-
-    # 통계 정보
-    if hasattr(st.session_state, "chroma_service"):
-        collection_info = st.session_state.chroma_service.get_collection_info()
-
-        st.markdown(
-            """
-        <div class="sidebar-section">
-            <h3>📊 시스템 정보</h3>
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <span class="stat-number">{}</span>
-                    <div class="stat-label">문서 수</div>
-                </div>
-                <div class="stat-card">
-                    <span class="stat-number">{}</span>
-                    <div class="stat-label">메시지 수</div>
-                </div>
-            </div>
-        </div>
-        """.format(
-                collection_info.get("document_count", 0),
-                len(st.session_state.get("messages", [])),
-            ),
-            unsafe_allow_html=True,
-        )
-
-    # 채팅 초기화 버튼
-    st.markdown('<div class="sidebar-section">', unsafe_allow_html=True)
-    st.markdown("<h3>🔄 채팅 관리</h3>", unsafe_allow_html=True)
-
-    if st.button("💬 새 대화 시작", use_container_width=True):
-        st.session_state.messages = []
-        st.session_state.chat_session = None
-        st.rerun()
-
-    # 도움말 섹션
-    st.markdown(
-        """
-    <div class="sidebar-section">
-        <h3>💡 사용 팁</h3>
-        <p style="font-size: 0.9rem; color: #666; line-height: 1.6;">
-        • 구체적인 질문을 해주세요<br>
-        • "늘봄학교 운영시간"처럼 명확하게 물어보세요<br>
-        • 한 번에 하나의 주제만 질문해주세요
-        </p>
-    </div>
-    """,
-        unsafe_allow_html=True,
-    )
-
-    st.markdown("</div>", unsafe_allow_html=True)

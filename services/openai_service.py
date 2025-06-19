@@ -13,8 +13,9 @@ class OpenAIService:
             raise ValueError("OpenAI API 키가 설정되지 않았습니다.")
 
         self.client = OpenAI(api_key=self.api_key)
-        self.model = "gpt-3.5-turbo"
-        self.temperature = 0.7
+        self.model = "gpt-4.1-mini"
+        self.embedding_model = "text-embedding-3-small"
+        self.temperature = 0.2
         self.max_tokens = 1000
 
     def generate_response(self, messages: List[ChatCompletionMessageParam]) -> str:
@@ -40,7 +41,9 @@ class OpenAIService:
         """텍스트 임베딩 생성"""
         try:
             response = self.client.embeddings.create(
-                model="text-embedding-ada-002", input=text
+                model=self.embedding_model,
+                input=text,
+                dimensions=384,
             )
             return response.data[0].embedding
         except Exception as e:
