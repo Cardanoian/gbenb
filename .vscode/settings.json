@@ -1,3 +1,11 @@
 {
-  "cSpell.words": ["chromadb", "neulbom"]
+  "cSpell.words": [
+    "chromadb",
+    "dotenv",
+    "metadatas",
+    "neulbom",
+    "numpy",
+    "selectbox",
+    "streamlit"
+  ]
 }
