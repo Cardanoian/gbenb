@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import {
   Send,
-  Bot,
   User,
   FileText,
   MessageCircle,
@@ -11,88 +10,374 @@ import {
   ThumbsDown,
   Copy,
   X,
+  AlertCircle,
+  BookOpen,
 } from 'lucide-react';
-import '@tailwindcss/theme';
 
-// 벡터 데이터 (실제로는 Python에서 생성된 JSON 파일을 불러와야 함)
-const SAMPLE_VECTOR_DATA = {
-  documents: [
-    {
-      id: 0,
-      text: '무순위 청약 시에는 부부 중복신청이 가능합니다. 다만, 당첨되면 둘 중 하나는 포기해야 합니다.',
-      metadata: {
-        file_name: '청약가이드.pdf',
-        page: 12,
-        source: '청약가이드.pdf',
-      },
-      vector: [0.1, 0.2, 0.3], // 실제로는 1536차원 벡터
-    },
-    {
-      id: 1,
-      text: '1순위 청약자격은 무주택 세대구성원으로 청약저축 가입기간이 2년 이상이어야 합니다.',
-      metadata: {
-        file_name: '청약가이드.pdf',
-        page: 8,
-        source: '청약가이드.pdf',
-      },
-      vector: [0.2, 0.3, 0.4],
-    },
-    {
-      id: 2,
-      text: '청약통장은 주택청약종합저축, 청약저축, 청약예금, 청약부금 등이 있습니다.',
-      metadata: {
-        file_name: '청약매뉴얼.pdf',
-        page: 5,
-        source: '청약매뉴얼.pdf',
-      },
-      vector: [0.3, 0.4, 0.5],
-    },
-  ],
-  embedding_model: 'text-embedding-3-small',
-};
+// LangChain imports - 실제 사용 시 이렇게 import
+import { OpenAI, OpenAIEmbeddings } from '@langchain/openai';
+import { ChatOpenAI } from '@langchain/openai';
+import { MemoryVectorStore } from 'langchain/vectorstores/memory';
+import { Document } from '@langchain/core/documents';
+import { PromptTemplate } from '@langchain/core/prompts';
+import { RunnableSequence } from '@langchain/core/runnables';
+import { StringOutputParser } from '@langchain/core/output_parsers';
+import type { VectorStore } from '@langchain/core/vectorstores';
 
-// 추천 질문들
-const SUGGESTED_QUESTIONS = [
-  '무순위 청약 시에도 부부 중복신청이 가능한가요?',
-  '1순위 청약 자격은 무엇인가요?',
-  '청약통장 종류에는 어떤 것들이 있나요?',
-  '청약 당첨 확률을 높이는 방법은?',
-];
+// 환경변수
+const OPENAI_API_KEY = import.meta.env.VITE_OPENAI_API_KEY;
 
-// 간단한 코사인 유사도 계산 (실제로는 더 복잡한 벡터 연산이 필요)
-const calculateSimilarity = (vec1, vec2) => {
-  const dotProduct = vec1.reduce((sum, a, i) => sum + a * vec2[i], 0);
-  const magnitude1 = Math.sqrt(vec1.reduce((sum, a) => sum + a * a, 0));
-  const magnitude2 = Math.sqrt(vec2.reduce((sum, a) => sum + a * a, 0));
-  return dotProduct / (magnitude1 * magnitude2);
-};
+// LangChain 모킹 클래스들 (실제로는 위의 import를 사용)
+// class Document {
+//   constructor(fields) {
+//     this.pageContent = fields.pageContent;
+//     this.metadata = fields.metadata || {};
+//   }
+// }
 
-// 가상의 OpenAI 임베딩 함수 (실제로는 API 호출 필요)
-const getEmbedding = async (text) => {
-  // 실제 구현에서는 OpenAI API를 호출해야 함
-  return [Math.random(), Math.random(), Math.random()];
-};
+// class OpenAIEmbeddings {
+//   constructor(config) {
+//     this.apiKey = config.openAIApiKey;
+//     this.modelName = config.modelName || 'text-embedding-3-small';
+//   }
 
-// 가상의 GPT 응답 생성 함수 (실제로는 OpenAI API 호출 필요)
-const generateResponse = async (question, context) => {
-  // 실제 구현에서는 OpenAI GPT API를 호출해야 함
-  const responses = {
-    무순위:
-      '무순위 청약 시에는 부부 중복신청이 가능합니다. 다만, 당첨 시 둘 중 하나는 포기해야 합니다.',
-    '1순위':
-      '1순위 청약자격은 무주택 세대구성원으로 청약저축 가입기간이 2년 이상이어야 합니다.',
-    청약통장:
-      '청약통장은 주택청약종합저축, 청약저축, 청약예금, 청약부금 등이 있습니다.',
-  };
+//   async embedQuery(text) {
+//     const response = await fetch('https://api.openai.com/v1/embeddings', {
+//       method: 'POST',
+//       headers: {
+//         'Content-Type': 'application/json',
+//         Authorization: `Bearer ${this.apiKey}`,
+//       },
+//       body: JSON.stringify({
+//         model: this.modelName,
+//         input: text,
+//       }),
+//     });
 
-  for (const [key, response] of Object.entries(responses)) {
-    if (question.includes(key)) {
-      return response;
+//     if (!response.ok) {
+//       throw new Error(`OpenAI API error: ${response.status}`);
+//     }
+
+//     const data = await response.json();
+//     return data.data[0].embedding;
+//   }
+
+//   async embedDocuments(texts) {
+//     const embeddings = [];
+//     for (const text of texts) {
+//       const embedding = await this.embedQuery(text);
+//       embeddings.push(embedding);
+//     }
+//     return embeddings;
+//   }
+// }
+
+// class ChatOpenAI {
+//   constructor(config) {
+//     this.apiKey = config.openAIApiKey;
+//     this.modelName = config.modelName || 'gpt-4o-mini';
+//     this.temperature = config.temperature || 0.7;
+//     this.maxTokens = config.maxTokens || 1000;
+//   }
+
+//   async invoke(messages) {
+//     const formattedMessages = Array.isArray(messages)
+//       ? messages
+//       : [{ role: 'user', content: messages }];
+
+//     const response = await fetch('https://api.openai.com/v1/chat/completions', {
+//       method: 'POST',
+//       headers: {
+//         'Content-Type': 'application/json',
+//         Authorization: `Bearer ${this.apiKey}`,
+//       },
+//       body: JSON.stringify({
+//         model: this.modelName,
+//         messages: formattedMessages,
+//         max_tokens: this.maxTokens,
+//         temperature: this.temperature,
+//       }),
+//     });
+
+//     if (!response.ok) {
+//       throw new Error(`OpenAI API error: ${response.status}`);
+//     }
+
+//     const data = await response.json();
+//     return {
+//       content: data.choices[0].message.content.trim(),
+//     };
+//   }
+// }
+
+// class MemoryVectorStore {
+//   constructor(embeddings, config = {}) {
+//     this.embeddings = embeddings;
+//     this.documents = [];
+//     this.vectors = [];
+//   }
+
+//   static async fromDocuments(documents, embeddings) {
+//     const vectorStore = new MemoryVectorStore(embeddings);
+//     await vectorStore.addDocuments(documents);
+//     return vectorStore;
+//   }
+
+//   async addDocuments(documents) {
+//     const texts = documents.map((doc) => doc.pageContent);
+//     const vectors = await this.embeddings.embedDocuments(texts);
+
+//     this.documents.push(...documents);
+//     this.vectors.push(...vectors);
+//   }
+
+//   async similaritySearch(query, k = 4) {
+//     const queryVector = await this.embeddings.embedQuery(query);
+//     const similarities = this.vectors.map((vector, index) => ({
+//       document: this.documents[index],
+//       similarity: this.cosineSimilarity(queryVector, vector),
+//       index,
+//     }));
+
+//     return similarities
+//       .sort((a, b) => b.similarity - a.similarity)
+//       .slice(0, k)
+//       .map((item) => item.document);
+//   }
+
+//   cosineSimilarity(vecA, vecB) {
+//     const dotProduct = vecA.reduce((sum, a, i) => sum + a * vecB[i], 0);
+//     const magnitudeA = Math.sqrt(vecA.reduce((sum, a) => sum + a * a, 0));
+//     const magnitudeB = Math.sqrt(vecB.reduce((sum, a) => sum + a * a, 0));
+//     return dotProduct / (magnitudeA * magnitudeB);
+//   }
+// }
+
+// class PromptTemplate {
+//   constructor(config) {
+//     this.template = config.template;
+//     this.inputVariables = config.inputVariables;
+//   }
+
+//   static fromTemplate(template) {
+//     const inputVariables = [...template.matchAll(/\{(\w+)\}/g)].map(
+//       (match) => match[1]
+//     );
+//     return new PromptTemplate({ template, inputVariables });
+//   }
+
+//   format(values) {
+//     let formatted = this.template;
+//     for (const [key, value] of Object.entries(values)) {
+//       formatted = formatted.replace(new RegExp(`\\{${key}\\}`, 'g'), value);
+//     }
+//     return formatted;
+//   }
+
+//   pipe(nextRunnable) {
+//     return new RunnableSequence([this, nextRunnable]);
+//   }
+// }
+
+// class StringOutputParser {
+//   parse(text) {
+//     return typeof text === 'string' ? text : text.content;
+//   }
+
+//   pipe(nextRunnable) {
+//     return new RunnableSequence([this, nextRunnable]);
+//   }
+// }
+
+// class RunnableSequence {
+//   constructor(steps) {
+//     this.steps = steps;
+//   }
+
+//   async invoke(input) {
+//     let result = input;
+//     for (const step of this.steps) {
+//       if (step instanceof PromptTemplate) {
+//         result = step.format(result);
+//       } else if (step instanceof ChatOpenAI) {
+//         result = await step.invoke(result);
+//       } else if (step instanceof StringOutputParser) {
+//         result = step.parse(result);
+//       } else if (typeof step.invoke === 'function') {
+//         result = await step.invoke(result);
+//       }
+//     }
+//     return result;
+//   }
+
+//   pipe(nextRunnable) {
+//     return new RunnableSequence([...this.steps, nextRunnable]);
+//   }
+// }
+
+interface RawDocument {
+  text: string;
+  metadata: Record<string, any>;
+  vector: number[];
+}
+
+// RAG 시스템 클래스
+class RAGSystem {
+  vectorStore: VectorStore | null;
+  embeddings: OpenAIEmbeddings | null;
+  llm: ChatOpenAI | null;
+  ragChain: RunnableSequence | null;
+  isInitialized: boolean;
+  constructor() {
+    this.vectorStore = null;
+    this.embeddings = null;
+    this.llm = null;
+    this.ragChain = null;
+    this.isInitialized = false;
+  }
+
+  async initialize() {
+    try {
+      // 1. OpenAI 임베딩 모델 초기화
+      this.embeddings = new OpenAIEmbeddings({
+        openAIApiKey: OPENAI_API_KEY,
+        modelName: 'text-embedding-3-small',
+      });
+
+      // 2. OpenAI 챗 모델 초기화
+      this.llm = new ChatOpenAI({
+        openAIApiKey: OPENAI_API_KEY,
+        modelName: 'gpt-4o-mini',
+        temperature: 0.7,
+      });
+
+      // 3. 벡터 데이터베이스 로드
+      await this.loadVectorStore();
+
+      // 4. RAG 체인 구성
+      this.createRAGChain();
+
+      this.isInitialized = true;
+      console.log('RAG 시스템 초기화 완료');
+      return true;
+    } catch (error) {
+      console.error('RAG 시스템 초기화 실패:', error);
+      throw error;
     }
   }
 
-  return '죄송합니다. 해당 질문에 대한 정보를 찾을 수 없습니다. 다른 질문을 해주세요.';
-};
+  async loadVectorStore() {
+    try {
+      const response = await fetch('./vector_database.json');
+      if (!response.ok) {
+        throw new Error(`벡터 데이터베이스 로드 실패: ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      // data.documents 타입 명시
+      const rawDocuments = data.documents as RawDocument[];
+
+      // Document 객체 배열 생성
+      const documents = rawDocuments.map(
+        (doc: RawDocument) =>
+          new Document({
+            pageContent: doc.text,
+            metadata: doc.metadata,
+          })
+      );
+
+      // MemoryVectorStore 생성 (기존 벡터 사용)
+      this.vectorStore = new MemoryVectorStore(this.embeddings);
+      (this.vectorStore as MemoryVectorStore).documents = documents;
+
+      // 기존 벡터 데이터 사용
+      (this.vectorStore as MemoryVectorStore).vectors = rawDocuments.map(
+        (doc: RawDocument) => doc.vector
+      );
+
+      console.log(`${documents.length}개 문서가 벡터 스토어에 로드됨`);
+    } catch (error) {
+      console.error('벡터 스토어 로드 실패:', error);
+      throw error;
+    }
+  }
+
+  createRAGChain() {
+    // RAG 프롬프트 템플릿
+    const ragPromptTemplate = PromptTemplate.fromTemplate(`
+다음의 컨텍스트를 활용해서 늘봄학교에 대한 질문에 답변해줘.
+
+컨텍스트:
+{context}
+
+질문: {question}
+
+답변 지침:
+- 질문에 대한 정확하고 도움이 되는 답변을 제공해줘
+- 간결하고 이해하기 쉽게 설명해줘
+- 친근하고 따뜻한 톤으로 답변해줘
+- 컨텍스트에 정보가 없다면 솔직히 모른다고 해줘
+
+답변:`);
+
+    // 문서 포맷터 (컨텍스트 생성)
+    const formatDocuments = (docs: Document[]) => {
+      return docs.map((doc: Document) => doc.pageContent).join('\n\n');
+    };
+
+    // RAG 체인 구성
+    this.ragChain = {
+      invoke: async (input) => {
+        // 1. 관련 문서 검색
+        const relevantDocs = await this.vectorStore.similaritySearch(
+          input.question,
+          4
+        );
+
+        // 2. 컨텍스트 생성
+        const context = formatDocuments(relevantDocs);
+
+        // 3. 프롬프트 생성
+        const prompt = ragPromptTemplate.format({
+          context: context,
+          question: input.question,
+        });
+
+        // 4. LLM 호출
+        const response = await this.llm.invoke([
+          {
+            role: 'user',
+            content: prompt,
+          },
+        ]);
+
+        return {
+          answer: response.content,
+          sourceDocuments: relevantDocs,
+        };
+      },
+    };
+  }
+
+  async query(question) {
+    if (!this.isInitialized) {
+      throw new Error('RAG 시스템이 초기화되지 않았습니다.');
+    }
+
+    return await this.ragChain.invoke({ question });
+  }
+}
+
+// 늘봄학교 관련 추천 질문들
+const SUGGESTED_QUESTIONS = [
+  '늘봄학교는 무엇인가요?',
+  '늘봄학교 신청 방법을 알려주세요',
+  '늘봄학교 운영 시간은 어떻게 되나요?',
+  '늘봄학교 프로그램에는 어떤 것들이 있나요?',
+  '늘봄학교 이용료는 얼마인가요?',
+  '늘봄학교 급식은 어떻게 제공되나요?',
+];
 
 const ChatMessage = ({ message, isUser, onCopy }) => {
   const formatTime = (date) => {
@@ -115,13 +400,13 @@ const ChatMessage = ({ message, isUser, onCopy }) => {
             className={`size-8 rounded-full flex items-center justify-center shrink-0 ${
               isUser
                 ? 'bg-blue-500'
-                : 'bg-gradient-to-r from-purple-500 to-pink-500'
+                : 'bg-gradient-to-r from-green-500 to-blue-500'
             }`}
           >
             {isUser ? (
               <User className='size-4 text-white' />
             ) : (
-              <Bot className='size-4 text-white' />
+              <BookOpen className='size-4 text-white' />
             )}
           </div>
 
@@ -192,20 +477,45 @@ const ChatMessage = ({ message, isUser, onCopy }) => {
   );
 };
 
-const PDFChatbot = () => {
+const App = () => {
   const [messages, setMessages] = useState([
     {
       id: 1,
       content:
-        '안녕하세요! 청약 관련 질문을 도와드리겠습니다. 궁금한 것이 있으시면 언제든 물어보세요.',
+        '안녕하세요! 늘봄학교에 대한 궁금한 점을 도와드리겠습니다. 언제든 질문해 주세요! 🌱',
       isUser: false,
       timestamp: new Date(),
     },
   ]);
   const [inputMessage, setInputMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [ragSystem, setRagSystem] = useState(null);
+  const [isInitialized, setIsInitialized] = useState(false);
+  const [error, setError] = useState(null);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
+
+  // RAG 시스템 초기화
+  useEffect(() => {
+    const initializeRAG = async () => {
+      try {
+        if (!OPENAI_API_KEY) {
+          throw new Error('OpenAI API 키가 설정되지 않았습니다.');
+        }
+
+        const rag = new RAGSystem();
+        await rag.initialize();
+
+        setRagSystem(rag);
+        setIsInitialized(true);
+      } catch (err) {
+        console.error('RAG 시스템 초기화 실패:', err);
+        setError(err.message);
+      }
+    };
+
+    initializeRAG();
+  }, []);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -221,7 +531,7 @@ const PDFChatbot = () => {
 
   const handleCopyMessage = (content) => {
     navigator.clipboard.writeText(content).then(() => {
-      // 복사 완료 표시 (간단한 토스트 메시지)
+      // 복사 완료 표시
     });
   };
 
@@ -231,7 +541,8 @@ const PDFChatbot = () => {
   };
 
   const handleSendMessage = async () => {
-    if (!inputMessage.trim() || isLoading) return;
+    if (!inputMessage.trim() || isLoading || !isInitialized || !ragSystem)
+      return;
 
     const userMessage = {
       id: Date.now(),
@@ -241,49 +552,42 @@ const PDFChatbot = () => {
     };
 
     setMessages((prev) => [...prev, userMessage]);
+    const currentQuestion = inputMessage;
     setInputMessage('');
     setIsLoading(true);
+    setError(null);
 
     try {
-      // 1. 사용자 질문을 임베딩으로 변환
-      const questionEmbedding = await getEmbedding(inputMessage);
+      // LangChain RAG 시스템으로 응답 생성
+      const result = await ragSystem.query(currentQuestion);
 
-      // 2. 관련 문서 검색 (코사인 유사도 기반)
-      const similarities = SAMPLE_VECTOR_DATA.documents.map((doc) => ({
-        ...doc,
-        similarity: calculateSimilarity(questionEmbedding, doc.vector),
-      }));
-
-      // 3. 가장 유사한 문서 3개 선택
-      const topDocs = similarities
-        .sort((a, b) => b.similarity - a.similarity)
-        .slice(0, 3);
-
-      // 4. GPT로 응답 생성
-      const response = await generateResponse(inputMessage, topDocs);
-
-      // 5. 가장 관련성 높은 문서 정보 추출
-      const bestMatch = topDocs[0];
+      // 가장 관련성 높은 문서 정보 추출
+      const bestMatch = result.sourceDocuments && result.sourceDocuments[0];
 
       const aiMessage = {
         id: Date.now() + 1,
-        content: response,
+        content: result.answer,
         isUser: false,
         timestamp: new Date(),
         reference: bestMatch
           ? {
-              fileName: bestMatch.metadata.file_name,
-              page: bestMatch.metadata.page + 1,
+              fileName:
+                bestMatch.metadata.file_name ||
+                bestMatch.metadata.source ||
+                '늘봄학교 가이드',
+              page: (bestMatch.metadata.page || 0) + 1,
             }
           : null,
       };
 
       setMessages((prev) => [...prev, aiMessage]);
     } catch (error) {
-      console.error('Error generating response:', error);
+      console.error('응답 생성 오류:', error);
+      setError(error.message);
+
       const errorMessage = {
         id: Date.now() + 1,
-        content: '죄송합니다. 오류가 발생했습니다. 다시 시도해주세요.',
+        content: `죄송합니다. 오류가 발생했습니다: ${error.message}`,
         isUser: false,
         timestamp: new Date(),
       };
@@ -300,54 +604,85 @@ const PDFChatbot = () => {
     }
   };
 
+  if (!OPENAI_API_KEY) {
+    return (
+      <div className='bg-white rounded-xl shadow-lg border border-gray-100 h-screen flex flex-col items-center justify-center'>
+        <AlertCircle className='size-12 text-red-500 mb-4' />
+        <h3 className='text-lg font-semibold text-gray-900 mb-2'>
+          API 키가 필요합니다
+        </h3>
+        <p className='text-sm text-gray-600 text-center max-w-md'>
+          .env 파일에 VITE_OPENAI_API_KEY를 설정해주세요.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className='bg-white rounded-xl shadow-lg border border-gray-100 h-screen flex flex-col'>
       {/* 헤더 */}
-      <div className='p-4 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-purple-50 rounded-t-xl'>
+      <div className='p-4 border-b border-gray-200 bg-gradient-to-r from-green-50 to-blue-50 rounded-t-xl'>
         <div className='flex items-center justify-between'>
           <div className='flex items-center space-x-3'>
-            <div className='size-10 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full flex items-center justify-center'>
-              <Bot className='size-6 text-white' />
+            <div className='size-10 bg-gradient-to-r from-green-500 to-blue-500 rounded-full flex items-center justify-center'>
+              <BookOpen className='size-6 text-white' />
             </div>
             <div>
-              <h3 className='font-bold text-gray-900'>청약 FAQ 챗봇</h3>
+              <h3 className='font-bold text-gray-900'>늘봄학교 Q&A 챗봇</h3>
               <p className='text-sm text-gray-600'>
-                청약 관련 질문을 도와드립니다
+                {isInitialized
+                  ? 'LangChain 기반 RAG 시스템'
+                  : '시스템 초기화 중...'}
               </p>
             </div>
           </div>
-          <button
-            className='p-2 text-gray-400 hover:text-gray-600 transition-colors rounded-lg hover:bg-white'
-            title='닫기'
-          >
-            <X className='size-5' />
-          </button>
+          <div className='flex items-center space-x-2'>
+            <div
+              className={`size-2 rounded-full ${
+                isInitialized ? 'bg-green-500' : 'bg-yellow-500'
+              }`}
+            ></div>
+            <button
+              className='p-2 text-gray-400 hover:text-gray-600 transition-colors rounded-lg hover:bg-white'
+              title='닫기'
+            >
+              <X className='size-5' />
+            </button>
+          </div>
         </div>
       </div>
 
+      {/* 에러 표시 */}
+      {error && (
+        <div className='mx-4 mt-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-center space-x-2'>
+          <AlertCircle className='size-4 text-red-500' />
+          <p className='text-sm text-red-700'>{error}</p>
+        </div>
+      )}
+
       {/* 메시지 영역 */}
       <div className='flex-1 overflow-y-auto p-4 space-y-4'>
-        {messages.length === 1 ? (
+        {messages.length === 1 && isInitialized ? (
           <div className='text-center py-8'>
-            <div className='size-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4'>
-              <Sparkles className='size-8 text-blue-500' />
+            <div className='size-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4'>
+              <Sparkles className='size-8 text-green-500' />
             </div>
             <h4 className='font-medium text-gray-900 mb-2'>
-              안녕하세요! AI 도우미예요 👋
+              늘봄학교 도우미입니다! 🌱
             </h4>
             <p className='text-sm text-gray-600 mb-4'>
-              청약에 대해 궁금한 것이 있으면 언제든 물어보세요!
+              LangChain을 활용한 AI가 늘봄학교에 대한 질문에 답변해드려요!
             </p>
 
             {/* 추천 질문들 */}
             <div className='space-y-2'>
               <p className='text-xs text-gray-500'>💡 추천 질문:</p>
-              <div className='space-y-1'>
-                {SUGGESTED_QUESTIONS.slice(0, 2).map((question, index) => (
+              <div className='grid grid-cols-1 gap-2 max-w-md mx-auto'>
+                {SUGGESTED_QUESTIONS.slice(0, 4).map((question, index) => (
                   <button
                     key={index}
                     onClick={() => handleQuestionClick(question)}
-                    className='block w-full text-left px-3 py-2 text-sm bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition-colors'
+                    className='text-left px-3 py-2 text-sm bg-green-50 text-green-700 rounded-lg hover:bg-green-100 transition-colors'
                   >
                     {question}
                   </button>
@@ -371,8 +706,8 @@ const PDFChatbot = () => {
           <div className='flex justify-start'>
             <div className='max-w-[80%]'>
               <div className='flex items-start space-x-2'>
-                <div className='size-8 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full flex items-center justify-center'>
-                  <Bot className='size-4 text-white' />
+                <div className='size-8 bg-gradient-to-r from-green-500 to-blue-500 rounded-full flex items-center justify-center'>
+                  <BookOpen className='size-4 text-white' />
                 </div>
                 <div className='bg-gray-100 px-4 py-2 rounded-2xl'>
                   <div className='flex space-x-1'>
@@ -390,17 +725,18 @@ const PDFChatbot = () => {
       </div>
 
       {/* 추천 질문 영역 */}
-      {messages.length > 1 && (
+      {messages.length > 1 && isInitialized && (
         <div className='px-4 py-2 border-t border-gray-100'>
           <div className='flex flex-wrap gap-2'>
-            {SUGGESTED_QUESTIONS.slice(0, 2).map((question, index) => (
+            {SUGGESTED_QUESTIONS.slice(0, 3).map((question, index) => (
               <button
                 key={index}
                 onClick={() => handleQuestionClick(question)}
                 className='px-3 py-1 text-xs bg-gray-100 text-gray-600 rounded-full hover:bg-gray-200 transition-colors flex items-center space-x-1'
+                disabled={isLoading}
               >
                 <HelpCircle className='size-3' />
-                <span>{question}</span>
+                <span className='truncate max-w-32'>{question}</span>
               </button>
             ))}
           </div>
@@ -417,25 +753,34 @@ const PDFChatbot = () => {
               value={inputMessage}
               onChange={(e) => setInputMessage(e.target.value)}
               onKeyPress={handleKeyPress}
-              placeholder='청약에 대해 궁금한 것을 물어보세요...'
-              className='w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500'
-              disabled={isLoading}
+              placeholder={
+                isInitialized
+                  ? '늘봄학교에 대해 궁금한 것을 물어보세요...'
+                  : 'LangChain 시스템 초기화 중...'
+              }
+              className='w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-green-500 disabled:bg-gray-100'
+              disabled={isLoading || !isInitialized}
             />
           </div>
           <button
             onClick={handleSendMessage}
-            disabled={!inputMessage.trim() || isLoading}
-            className='p-3 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-xl hover:from-blue-600 hover:to-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed'
+            disabled={!inputMessage.trim() || isLoading || !isInitialized}
+            className='p-3 bg-gradient-to-r from-green-500 to-blue-500 text-white rounded-xl hover:from-green-600 hover:to-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed'
           >
             <Send className='size-5' />
           </button>
         </div>
 
         <div className='flex items-center justify-between mt-2 text-xs text-gray-500'>
-          <span>Enter로 전송, Shift+Enter로 줄바꿈</span>
+          <span>Enter로 전송 | LangChain RAG 시스템</span>
           <div className='flex items-center space-x-2'>
             <MessageCircle className='size-3' />
             <span>{messages.length - 1}개 메시지</span>
+            <div
+              className={`size-2 rounded-full ${
+                isInitialized ? 'bg-green-500' : 'bg-yellow-500'
+              }`}
+            ></div>
           </div>
         </div>
       </div>
@@ -443,4 +788,4 @@ const PDFChatbot = () => {
   );
 };
 
-export default PDFChatbot;
+export default App;
