@@ -1,82 +1,39 @@
 import os
-from PyPDF2 import PdfReader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
 import streamlit as st
-import google.generativeai as genai
 from langchain_community.vectorstores import FAISS
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain.prompts import PromptTemplate
 from dotenv import load_dotenv
-from langchain.schema import Document
-from langchain.chains import create_retrieval_chain  # 이 줄을 추가합니다.
-from langchain.chains.combine_documents import (
-    create_stuff_documents_chain,
-)  # 이 줄을 추가합니다.
+from langchain.chains import create_retrieval_chain
+from langchain.chains.combine_documents import create_stuff_documents_chain
 
 load_dotenv()
-# read all pdf files and return text
-
-
-def get_pdf_text(pdf_docs):
-    documents = []
-    for pdf in pdf_docs:
-        pdf_reader = PdfReader(pdf)
-        for i, page in enumerate(pdf_reader.pages):
-            text = page.extract_text()
-            if text:
-                documents.append(
-                    Document(
-                        page_content=text, metadata={"source": pdf.name, "page": i + 1}
-                    )
-                )
-    return documents
-
-
-# split text into chunks
-
-
-def get_text_chunks(documents):  # 인자를 documents로 변경
-    splitter = RecursiveCharacterTextSplitter(chunk_size=10000, chunk_overlap=1000)
-    chunks = splitter.split_documents(documents)  # split_text 대신 split_documents 사용
-    return chunks  # list of Document objects
-
-
-# get embeddings for each chunk
-
-
-def get_vector_store(chunks):
-    embeddings = GoogleGenerativeAIEmbeddings(
-        model="models/embedding-001"
-    )  # type: ignore
-    vector_store = FAISS.from_documents(
-        chunks, embedding=embeddings
-    )  # from_texts 대신 from_documents 사용
-    vector_store.save_local("faiss_index")
 
 
 def get_conversational_chain():
-    prompt_template = """제공된 컨텍스트에서 가능한 한 자세하게 질문에 답변하고, 모든 세부 정보를 제공해야 합니다. 
-답변이 제공된 컨텍스트에 없으면 '답변이 컨텍스트에 없습니다'라고만 말하고, 잘못된 답변을 제공하지 마십시오.
+    prompt_template = """당신은 초등학교 돌봄교실, 방과후교실, 늘봄교실 운영에 관한 전문가입니다.
+제공된 컨텍스트를 바탕으로 담당 교사들의 질문에 대해 가능한 한 자세하고 정확하게 답변해주세요.
+답변은 가독성을 위해 적절한 줄바꿈과 문단 구분을 사용하여 작성해주세요.
+답변은 컨텍스트 내의 모든 관련 세부 정보를 포함해야 합니다.
+만약 제공된 컨텍스트에 질문에 대한 답변과 관련된 내용이 없으면, '제공된 정보로는 답변할 수 없습니다.'라고만 말하십시오.
 컨텍스트:\n {context}\n질문: \n{input}\n\n답변:
 """
 
     model = ChatGoogleGenerativeAI(
-        model="gemini-2.0-flash",
-        temperature=0.3,
+        model="gemini-2.5-flash",
+        temperature=0.2,
     )
     prompt = PromptTemplate(
         template=prompt_template,
-        input_variables=["context", "input"],  # "question" 대신 "input"으로 변경
+        input_variables=["context", "input"],
     )
-    # load_qa_chain 대신 create_stuff_documents_chain 사용
     stuff_documents_chain = create_stuff_documents_chain(model, prompt)
-    return stuff_documents_chain  # 변경된 체인 반환
+    return stuff_documents_chain
 
 
 def clear_chat_history():
     st.session_state.messages = [
-        {"role": "assistant", "content": "PDF를 업로드하고 질문해주세요."}
+        {"role": "assistant", "content": "무엇을 도와드릴까요?"}
     ]
 
 
@@ -85,70 +42,50 @@ def user_input(user_question):
         model="models/embedding-001"
     )  # type: ignore
 
+    # FAISS 인덱스가 존재하는지 확인
+    if not os.path.exists("faiss_index"):
+        st.error("벡터DB가 존재하지 않습니다.")
+        return {"output_text": "벡터DB가 존재하지 않습니다."}
+
     new_db = FAISS.load_local(
         "faiss_index", embeddings, allow_dangerous_deserialization=True
     )
-    retriever = new_db.as_retriever()  # 검색기 생성
+    retriever = new_db.as_retriever()
 
-    document_chain = get_conversational_chain()  # 문서 체인 가져오기
+    document_chain = get_conversational_chain()
 
-    # 검색 체인 생성
     retrieval_chain = create_retrieval_chain(retriever, document_chain)
 
-    # invoke 메서드 사용
     response = retrieval_chain.invoke({"input": user_question})
 
-    # 여기에 문서 출처 정보를 추가합니다.
     source_info = []
-    # response에서 docs를 가져오는 방식 변경
     for doc in response["context"]:
         if "source" in doc.metadata and "page" in doc.metadata:
             source_info.append(
                 f"{doc.metadata['source']} (페이지: {doc.metadata['page']})"
             )
 
-    if source_info:
-        unique_sources = sorted(list(set(source_info)))
-        response_text = (
-            response["answer"] + "\n\n참고 문서: " + "\n".join(unique_sources)
-        )
-    else:
-        response_text = response["answer"]
+    # 답변 텍스트는 그대로 반환하고, 참고 문서는 별도의 키로 반환
+    response_text = response["answer"]
 
-    print(response_text)
-    return {"output_text": response_text}
+    # print(response_text)
+    return {"output_text": response_text, "source_documents": source_info}
 
 
 def main():
-    st.set_page_config(page_title="제미니 PDF 챗봇", page_icon="🤖")
+    st.set_page_config(page_title="늘봄학교 운영 도우미 챗봇", page_icon="💬")
 
-    # Sidebar for uploading PDF files
-    with st.sidebar:
-        st.title("메뉴:")
-        pdf_docs = st.file_uploader(
-            "PDF 파일을 업로드하고 '제출 및 처리' 버튼을 클릭하세요",
-            accept_multiple_files=True,
-        )
-        if st.button("제출 및 처리"):
-            with st.spinner("처리 중..."):
-                documents = get_pdf_text(pdf_docs)  # raw_text 대신 documents로 변경
-                text_chunks = get_text_chunks(
-                    documents
-                )  # raw_text 대신 documents로 변경
-                get_vector_store(text_chunks)
-                st.success("완료")
+    st.title("늘봄학교 운영 도우미 챗봇 💬")
+    st.write("문의사항 및 오류보고는 포항원동초등학교 교사 김지원에게 해주세요.")
 
-    # Main content area for displaying chat messages
-    st.title("제미니를 사용하여 PDF 파일과 채팅하기🤖")
-    st.write("채팅에 오신 것을 환영합니다!")
-    st.sidebar.button("채팅 기록 지우기", on_click=clear_chat_history)
-
-    # Chat input
-    # Placeholder for chat messages
+    st.button("채팅 기록 지우기", on_click=clear_chat_history)
 
     if "messages" not in st.session_state.keys():
         st.session_state.messages = [
-            {"role": "assistant", "content": "PDF를 업로드하고 질문해주세요."}
+            {
+                "role": "assistant",
+                "content": "무엇을 도와드릴까요?",
+            }
         ]
 
     for message in st.session_state.messages:
@@ -160,22 +97,41 @@ def main():
         with st.chat_message("user"):
             st.write(prompt)
 
-    # Display chat messages and bot response
     if st.session_state.messages[-1]["role"] != "assistant":
         with st.chat_message("assistant"):
             with st.spinner("생각 중..."):
-                response_dict = user_input(
-                    prompt
-                )  # user_input이 딕셔너리를 반환하므로 변수명 변경
+                response_dict = user_input(prompt)
                 placeholder = st.empty()
                 full_response = ""
-                for item in response_dict[
-                    "output_text"
-                ]:  # response_dict에서 output_text를 가져옴
-                    full_response += item
+                # user_input 함수에서 반환된 딕셔너리의 'output_text' 키를 사용
+                if response_dict and "output_text" in response_dict:
+                    full_response = response_dict["output_text"]
                     placeholder.markdown(full_response)
-                placeholder.markdown(full_response)
-        if response_dict is not None:  # response_dict로 변경
+                else:
+                    full_response = "오류: 응답을 생성할 수 없습니다."
+                    placeholder.markdown(full_response)
+
+                # 참고 문서 표시 로직 추가
+                if (
+                    response_dict
+                    and "source_documents" in response_dict
+                    and response_dict["source_documents"]
+                ):
+                    st.markdown("---")  # 구분선 추가
+                    st.markdown("**참고 문서:**")
+                    unique_sources = sorted(
+                        list(set(response_dict["source_documents"]))
+                    )
+                    for source in unique_sources:
+                        st.info(source)  # 각 문서를 st.info 상자에 표시
+
+        if response_dict is not None:
+            # 메시지 저장 시 참고 문서는 제외하고 답변 텍스트만 저장
+            message = {"role": "assistant", "content": full_response}
+            st.session_state.messages.append(message)
+
+        if response_dict is not None:
+            # 메시지 저장 시 참고 문서는 제외하고 답변 텍스트만 저장
             message = {"role": "assistant", "content": full_response}
             st.session_state.messages.append(message)
 
