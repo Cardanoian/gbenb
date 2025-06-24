@@ -1,7 +1,7 @@
-streamlit
-chromadb
-openai
-langchain
-python-dotenv
-pandas
-numpy
+streamlit==1.46.0
+google-generativeai==0.8.5
+python-dotenv==1.1.1
+langchain==0.3.26
+faiss-cpu==1.11.0
+langchain_google_genai==2.0.10
+langchain-community==0.3.26

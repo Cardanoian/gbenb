@@ -1,198 +1,125 @@
-import streamlit as st
 import os
-from datetime import datetime
-import uuid
-from typing import List, Dict, Any
-from dataclasses import dataclass
-from pathlib import Path
+import streamlit as st
+import google.generativeai as genai
+from langchain_community.vectorstores import FAISS
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+from langchain.prompts import PromptTemplate
+from dotenv import load_dotenv
+from langchain.chains import create_retrieval_chain
+from langchain.chains.combine_documents import create_stuff_documents_chain
 
-# 로컬 모듈 import
-from services.chroma_service import ChromaService
-from services.openai_service import OpenAIService
-from services.langchain_service import LangChainService
-from models.chat_models import ChatMessage, ChatSession
-from utils.ui_helpers import apply_custom_css, render_message_bubble
-
-# 페이지 설정
-st.set_page_config(
-    page_title="늘봄학교 업무 도우미",
-    page_icon="🌸",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
-# 커스텀 CSS 적용
-apply_custom_css()
+load_dotenv()
 
 
-def initialize_services():
-    """서비스 초기화 - 기존 ChromaDB 파일 우선 로드"""
-    if "services_initialized" not in st.session_state:
-        try:
-            from dotenv import load_dotenv
+def get_conversational_chain():
+    prompt_template = """당신은 초등학교 돌봄교실, 방과후교실, 늘봄교실 운영에 관한 전문가입니다.
+제공된 컨텍스트를 바탕으로 담당 교사들의 질문에 대해 가능한 한 자세하고 정확하게 답변해주세요.
+답변은 컨텍스트 내의 모든 관련 세부 정보를 포함해야 합니다.
+만약 제공된 컨텍스트에 질문에 대한 답변이 명확하게 없으면, '제공된 정보로는 답변할 수 없습니다.'라고만 말하고, 추측하거나 잘못된 정보를 제공하지 마십시오.
+컨텍스트:\n {context}\n질문: \n{input}\n\n답변:
+"""
 
-            load_dotenv()
+    model = ChatGoogleGenerativeAI(
+        model="gemini-2.0-flash",
+        temperature=0.2,
+    )
+    prompt = PromptTemplate(
+        template=prompt_template,
+        input_variables=["context", "input"],
+    )
+    stuff_documents_chain = create_stuff_documents_chain(model, prompt)
+    return stuff_documents_chain
 
-            data_path = "./data"
-            data_dir = Path(data_path)
 
-            if not data_dir.exists():
-                st.error("❌ 데이터 디렉토리가 없습니다.")
-                st.session_state.services_initialized = False
-                st.session_state.database_status = "no_directory"
-                return
+def clear_chat_history():
+    st.session_state.messages = [
+        {"role": "assistant", "content": "무엇을 도와드릴까요?"}
+    ]
 
-            # ChromaDB 서비스 초기화 (기존 파일 자동 로드)
-            with st.spinner("🔍 기존 ChromaDB 파일을 찾고 있습니다..."):
-                chroma_service = ChromaService(
-                    persist_directory=data_path,
-                    collection_name="nb_vector_db",  # 기본값, 자동으로 기존 컬렉션 찾음
-                )
 
-            collection_info = chroma_service.get_collection_info()
-            doc_count = collection_info.get("document_count", 0)
+def user_input(user_question):
+    embeddings = GoogleGenerativeAIEmbeddings(
+        model="models/embedding-001"
+    )  # type: ignore
 
-            if doc_count == 0:
-                st.warning("⚠️ 데이터베이스가 비어있습니다.")
-            else:
-                st.success(
-                    f"✅ {doc_count}개의 문서가 포함된 기존 데이터베이스를 로드했습니다."
-                )
+    # FAISS 인덱스가 존재하는지 확인
+    if not os.path.exists("faiss_index"):
+        st.error("벡터DB가 존재하지 않습니다.")
+        return {"output_text": "벡터DB가 존재하지 않습니다."}
 
-            api_key = os.getenv("OPENAI_API_KEY")
-            if not api_key or api_key == "your_openai_api_key_here":
-                st.error("❌ OpenAI API 키가 설정되지 않았습니다.")
-                st.session_state.services_initialized = False
-                st.session_state.database_status = "no_api_key"
-                return
+    new_db = FAISS.load_local(
+        "faiss_index", embeddings, allow_dangerous_deserialization=True
+    )
+    retriever = new_db.as_retriever()
 
-            openai_service = OpenAIService(api_key=api_key)
-            langchain_service = LangChainService(
-                chroma_service=chroma_service, openai_service=openai_service
+    document_chain = get_conversational_chain()
+
+    retrieval_chain = create_retrieval_chain(retriever, document_chain)
+
+    response = retrieval_chain.invoke({"input": user_question})
+
+    source_info = []
+    for doc in response["context"]:
+        if "source" in doc.metadata and "page" in doc.metadata:
+            source_info.append(
+                f"{doc.metadata['source']} (페이지: {doc.metadata['page']})"
             )
 
-            st.session_state.chroma_service = chroma_service
-            st.session_state.langchain_service = langchain_service
-            st.session_state.services_initialized = True
-            st.session_state.database_status = "connected"
-            st.session_state.collection_info = collection_info
+    if source_info:
+        unique_sources = sorted(list(set(source_info)))
+        response_text = (
+            response["answer"] + "\n\n참고 문서: " + "\n".join(unique_sources)
+        )
+    else:
+        response_text = response["answer"]
 
-        except Exception as e:
-            st.error(f"❌ 서비스 초기화 실패: {str(e)}")
-            st.session_state.services_initialized = False
-            st.session_state.database_status = "error"
-            st.session_state.error_message = str(e)
-
-
-def initialize_chat_session():
-    """채팅 세션 초기화"""
-    if "chat_session" not in st.session_state:
-        st.session_state.chat_session = ChatSession()
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
+    print(response_text)
+    return {"output_text": response_text}
 
 
 def main():
-    """메인 애플리케이션"""
-    initialize_services()
-    initialize_chat_session()
+    st.set_page_config(page_title="늘봄학교 운영 도우미 챗봇", page_icon="💬")
 
-    render_header()
+    st.title("늘봄학교 운영 도우미 챗봇 💬")
+    st.write("늘봄학교 운영에 오신 것을 환영합니다!")
 
-    if not st.session_state.get("services_initialized", False):
-        st.error("서비스를 시작할 수 없습니다. 데이터베이스 또는 API 키를 확인하세요.")
-        return
+    st.button("채팅 기록 지우기", on_click=clear_chat_history)
 
-    # 채팅 인터페이스
-    render_chat_interface()
+    if "messages" not in st.session_state.keys():
+        st.session_state.messages = [
+            {
+                "role": "assistant",
+                "content": "늘봄학교 운영에 대해 무엇이든 질문해주세요!",
+            }
+        ]
 
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.write(message["content"])
 
-def render_header():
-    """헤더 렌더링"""
-    st.markdown(
-        """
-    <div class="main-header">
-        <div class="header-content">
-            <h1>🌸 늘봄학교 업무 도우미</h1>
-            <p>늘봄 관련 문서를 활용한 AI 챗봇</p>
-        </div>
-    </div>
-    """,
-        unsafe_allow_html=True,
-    )
+    if prompt := st.chat_input("여기에 질문을 입력하세요..."):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.write(prompt)
 
-
-def render_chat_interface():
-    """채팅 인터페이스 렌더링"""
-    st.markdown('<div class="chat-container">', unsafe_allow_html=True)
-    chat_container = st.container()
-    with chat_container:
-        if not st.session_state.messages:
-            st.markdown(
-                """
-            <div class="welcome-message">
-                <div class="welcome-content">
-                    <h3>👋 안녕하세요!</h3>
-                    <p>늘봄학교 업무와 관련된 질문을 입력해보세요.</p>
-                </div>
-            </div>
-            """,
-                unsafe_allow_html=True,
-            )
-        else:
-            for message in st.session_state.messages:
-                render_message_bubble(message)
-    st.markdown("</div>", unsafe_allow_html=True)
-    render_input_area()
-
-
-def render_input_area():
-    """메시지 입력 영역 렌더링"""
-    st.markdown('<div class="input-container">', unsafe_allow_html=True)
-    with st.form(key="chat_form", clear_on_submit=True):
-        col1, col2 = st.columns([5, 1])
-        with col1:
-            user_input = st.text_input(
-                label="메시지 입력",
-                placeholder="늘봄학교에 대해 궁금한 것을 물어보세요...",
-                label_visibility="collapsed",
-                key="user_input",
-            )
-        with col2:
-            submit_button = st.form_submit_button(
-                label="📤", use_container_width=True, type="primary"
-            )
-    if submit_button and user_input.strip():
-        handle_user_message(user_input.strip())
-    st.markdown("</div>", unsafe_allow_html=True)
-
-
-def handle_user_message(user_input: str):
-    """사용자 메시지 처리"""
-    try:
-        user_message = ChatMessage(
-            id=str(uuid.uuid4()),
-            content=user_input,
-            role="user",
-            timestamp=datetime.now(),
-        )
-        st.session_state.messages.append(user_message)
-        with st.spinner("🤔 답변을 생성하고 있습니다..."):
-            response = st.session_state.langchain_service.process_query(user_input)
-            ai_message = ChatMessage(
-                id=str(uuid.uuid4()),
-                content=response.get(
-                    "answer", "죄송합니다. 답변을 생성할 수 없습니다."
-                ),
-                role="assistant",
-                timestamp=datetime.now(),
-                sources=response.get("sources", []),
-                confidence=response.get("confidence", 0),
-            )
-            st.session_state.messages.append(ai_message)
-        st.rerun()
-    except Exception as e:
-        st.error(f"메시지 처리 중 오류가 발생했습니다: {str(e)}")
+    if st.session_state.messages[-1]["role"] != "assistant":
+        with st.chat_message("assistant"):
+            with st.spinner("생각 중..."):
+                response_dict = user_input(prompt)
+                placeholder = st.empty()
+                full_response = ""
+                # user_input 함수에서 반환된 딕셔너리의 'output_text' 키를 사용
+                if response_dict and "output_text" in response_dict:
+                    for item in response_dict["output_text"]:
+                        full_response += item
+                        placeholder.markdown(full_response)
+                    placeholder.markdown(full_response)
+                else:
+                    full_response = "오류: 응답을 생성할 수 없습니다."
+                    placeholder.markdown(full_response)
+        if response_dict is not None:
+            message = {"role": "assistant", "content": full_response}
+            st.session_state.messages.append(message)
 
 
 if __name__ == "__main__":
