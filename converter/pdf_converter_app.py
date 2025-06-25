@@ -1,4 +1,4 @@
-from PyPDF2 import PdfReader
+import fitz  # PyMuPDF
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 import streamlit as st
@@ -10,25 +10,49 @@ load_dotenv()
 
 
 # read all pdf files and return text
+import re
+
+
+def clean_pdf_text(text):
+    # 문장부호가 아닌 줄바꿈은 공백으로 치환
+    text = re.sub(r"(?<![.!?…])\n", " ", text)
+    # 여러 줄바꿈은 하나로
+    text = re.sub(r"\n+", "\n", text)
+    # 불필요한 공백 정리
+    text = re.sub(r" +", " ", text)
+    return text.strip()
+
+
 def get_pdf_text(pdf_docs):
     documents = []
     for pdf in pdf_docs:
-        pdf_reader = PdfReader(pdf)
-        for i, page in enumerate(pdf_reader.pages):
-            text = page.extract_text()
-            if text:
-                documents.append(
-                    Document(
-                        page_content=text, metadata={"source": pdf.name, "page": i + 1}
+        pdf.seek(0)  # 파일 포인터를 처음으로 이동
+        with fitz.open(stream=pdf.read(), filetype="pdf") as doc:
+            for i in range(doc.page_count):
+                page = doc[i]
+                text = page.get_text()  # type: ignore
+                if text:
+                    documents.append(
+                        Document(
+                            # page_content=clean_pdf_text(text),
+                            page_content=text,
+                            metadata={"source": pdf.name, "page": i + 1},
+                        )
                     )
-                )
     return documents
 
 
 # split text into chunks
 def get_text_chunks(documents):
-    splitter = RecursiveCharacterTextSplitter(chunk_size=10000, chunk_overlap=1000)
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
     chunks = splitter.split_documents(documents)
+    print(
+        len(chunks),
+        max(map(lambda x: len(x.page_content), chunks)),
+        min(map(lambda x: len(x.page_content), chunks)),
+    )
+    # for i, chunk in enumerate(chunks):
+    #     print(i, chunk)
     return chunks
 
 

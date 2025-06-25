@@ -26,7 +26,6 @@ def get_conversational_chain():
     prompt_template = """당신은 초등학교 돌봄교실, 방과후교실, 늘봄교실 운영에 관한 전문가입니다.
 제공된 컨텍스트를 바탕으로 담당 교사들의 질문에 대해 가능한 한 자세하고 정확하게 답변해주세요.
 답변은 가독성을 위해 적절한 줄바꿈과 문단 구분을 사용하여 작성해주세요.
-답변에 컨텍스트 내의 주요 관련 정보를 포함해야 합니다.
 
 이전 대화:\n{chat_history}\n컨텍스트:\n {context}\n질문:\n{input}\n\n답변:
 """
@@ -69,8 +68,6 @@ def user_input(messages) -> ResponseDict:
     # 대화 기록과 마지막 질문 분리
     chat_history = ""
     user_question = ""
-    if len(messages) > 5:
-        messages = messages[-5:]
     for i, message in enumerate(messages):
         if message["role"] == "user":
             if i == len(messages) - 1:  # 마지막 메시지가 사용자 질문
@@ -106,9 +103,20 @@ def user_input(messages) -> ResponseDict:
 
 
 def main():
-    st.set_page_config(page_title="늘봄학교 운영 도우미 챗봇", page_icon="💬")
+    st.set_page_config(page_title="늘봄학교 운영 도우미 챗봇", page_icon="nb_small.png")
 
-    st.title("늘봄학교 운영 도우미 챗봇 💬")
+    col1, col2 = st.columns([1, 8])
+    with col1:
+        st.image("nb_small.png", use_container_width=True)
+    with col2:
+        st.markdown(
+            """
+            <div style="display:flex; align-items:center; height:54px;">
+                <span style="font-size:2.2em; font-weight:bold; height:54px;">늘봄학교 운영 도우미 챗봇</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
     st.write("문의사항 및 오류보고: 포항원동초등학교 교사 김지원")
 
     st.button("채팅 기록 지우기", on_click=clear_chat_history)
