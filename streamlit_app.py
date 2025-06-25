@@ -27,7 +27,7 @@ def get_conversational_chain():
 제공된 컨텍스트를 바탕으로 담당 교사들의 질문에 대해 가능한 한 자세하고 정확하게 답변해주세요.
 답변은 가독성을 위해 적절한 줄바꿈과 문단 구분을 사용하여 작성해주세요.
 
-이전 대화:\n{chat_history}\n컨텍스트:\n {context}\n질문:\n{input}\n\n답변:
+컨텍스트:\n {context}\n질문:\n{input}\n\n답변:
 """
 
     model = ChatGoogleGenerativeAI(
@@ -36,7 +36,7 @@ def get_conversational_chain():
     )
     prompt = PromptTemplate(
         template=prompt_template,
-        input_variables=["chat_history", "context", "input"],
+        input_variables=["context", "input"],
     )
     stuff_documents_chain = create_stuff_documents_chain(model, prompt)
     return stuff_documents_chain
@@ -48,7 +48,7 @@ def clear_chat_history():
     ]
 
 
-def user_input(messages) -> ResponseDict:
+def user_input(user_question: str) -> ResponseDict:
     embeddings = GoogleGenerativeAIEmbeddings(
         model="models/text-embedding-004"
     )  # type: ignore
@@ -65,23 +65,9 @@ def user_input(messages) -> ResponseDict:
 
     document_chain = get_conversational_chain()
 
-    # 대화 기록과 마지막 질문 분리
-    chat_history = ""
-    user_question = ""
-    for i, message in enumerate(messages):
-        if message["role"] == "user":
-            if i == len(messages) - 1:  # 마지막 메시지가 사용자 질문
-                user_question = message["content"]
-            else:
-                chat_history += f"사용자: {message['content']}\n"
-        elif message["role"] == "assistant":
-            chat_history += f"어시스턴트: {message['content']}\n"
-
     retrieval_chain = create_retrieval_chain(retriever, document_chain)
 
-    response = retrieval_chain.invoke(
-        {"input": user_question, "chat_history": chat_history}
-    )
+    response = retrieval_chain.invoke({"input": user_question})
 
     # 참고 문서 정보: 파일명, 페이지, 본문(context)까지 포함
     source_info: List[ContextDocument] = []
@@ -141,7 +127,9 @@ def main():
     if st.session_state.messages[-1]["role"] != "assistant":
         with st.chat_message("assistant"):
             with st.spinner("생각 중..."):
-                response_dict = user_input(st.session_state.messages)
+                # user_input 함수에 마지막 사용자 질문만 전달
+                last_user_message = st.session_state.messages[-1]["content"]
+                response_dict = user_input(last_user_message)
                 placeholder = st.empty()
                 full_response = ""
                 # user_input 함수에서 반환된 딕셔너리의 'output_text' 키를 사용
