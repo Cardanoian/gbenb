@@ -27,7 +27,7 @@ def get_pdf_text(pdf_docs):
 
 # split text into chunks
 def get_text_chunks(documents):
-    splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=200)
+    splitter = RecursiveCharacterTextSplitter(chunk_size=10000, chunk_overlap=1000)
     chunks = splitter.split_documents(documents)
     return chunks
 
@@ -35,7 +35,7 @@ def get_text_chunks(documents):
 # get embeddings for each chunk and save to FAISS
 def get_vector_store(chunks):
     embeddings = GoogleGenerativeAIEmbeddings(
-        model="models/embedding-001"
+        model="models/text-embedding-004"
     )  # type: ignore
     vector_store = FAISS.from_documents(chunks, embedding=embeddings)
     vector_store.save_local("faiss_index")
