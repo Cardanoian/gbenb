@@ -5,3 +5,4 @@ langchain==0.3.26
 faiss-cpu==1.11.0
 langchain_google_genai==2.0.10
 langchain-community==0.3.26
+langchain-openai==0.1.20
