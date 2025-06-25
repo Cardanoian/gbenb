@@ -5,6 +5,7 @@ import streamlit as st
 from langchain_community.vectorstores import FAISS
 from dotenv import load_dotenv
 from langchain.schema import Document
+from typing import List
 
 load_dotenv()
 
@@ -24,11 +25,13 @@ def clean_pdf_text(text):
 
 
 def get_pdf_text(pdf_docs):
-    documents = []
+    documents: List[Document] = []
+    pages = 0
     for pdf in pdf_docs:
         pdf.seek(0)  # 파일 포인터를 처음으로 이동
         with fitz.open(stream=pdf.read(), filetype="pdf") as doc:
             for i in range(doc.page_count):
+                pages += 1
                 page = doc[i]
                 text = page.get_text()  # type: ignore
                 if text:
@@ -39,17 +42,16 @@ def get_pdf_text(pdf_docs):
                             metadata={"source": pdf.name, "page": i + 1},
                         )
                     )
+    print(f"총 페이지 수: {pages}")
     return documents
 
 
 # split text into chunks
-def get_text_chunks(documents):
+def get_text_chunks(documents: List[Document]):
     splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
     chunks = splitter.split_documents(documents)
     print(
-        len(chunks),
-        max(map(lambda x: len(x.page_content), chunks)),
-        min(map(lambda x: len(x.page_content), chunks)),
+        f"chunk 수: {len(chunks)}\nchunk크기 최댓값:{max(map(lambda x: len(x.page_content), chunks))}\nchunk크기 최솟값: {min(map(lambda x: len(x.page_content), chunks))}"
     )
     # for i, chunk in enumerate(chunks):
     #     print(i, chunk)
@@ -78,6 +80,7 @@ def main():
     )
     if st.button("변환 및 저장"):
         if pdf_docs:
+            print("\n".join(map(lambda x: x.name, pdf_docs)))
             with st.spinner("PDF 텍스트를 읽는 중..."):
                 documents = get_pdf_text(pdf_docs)
             with st.spinner("텍스트를 청크로 분할하는 중..."):
