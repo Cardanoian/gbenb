@@ -81,143 +81,7 @@ def preprocess_question(question: str) -> str:
     question = re.sub(r"알려\s*주세요", "", question)
     question = re.sub(r"가르쳐\s*주세요", "", question)
 
-    # 한글 키워드 확장 (수당 관련)
-    keyword_expansions = {
-        "담임수당": ["담임수당", "담임 수당", "담임교사 수당", "담임교사수당"],
-        "부장수당": ["부장수당", "부장 수당", "부장교사 수당", "부장교사수당"],
-        "수당": ["수당", "급여", "보수", "수령"],
-        "받을 수 있": ["받을 수 있", "수령 가능", "지급", "받는"],
-        "불가": ["불가", "불가능", "받을 수 없", "수령 불가"],
-    }
-
-    # 키워드 확장 적용
-    expanded_question = question
-    for keyword, expansions in keyword_expansions.items():
-        if keyword in question:
-            expanded_question += f" {' '.join(expansions)}"
-
-    return expanded_question.strip()
-
-
-def extract_keywords(question: str) -> List[str]:
-    """AI를 활용한 키워드 추출 함수 (개선됨)"""
-
-    try:
-        # 먼저 AI 기반 키워드 확장 시도
-        expanded_keywords = get_expanded_keywords_with_gemini(question)
-        if expanded_keywords:
-            return expanded_keywords[:8]  # 상위 8개 반환
-    except Exception as e:
-        print(f"AI 키워드 추출 실패: {e}")
-
-    # 폴백: 기본 키워드 추출
-    return extract_basic_keywords(question)
-
-
-def get_expanded_keywords_with_gemini(question: str) -> List[str]:
-    """Gemini AI를 사용한 키워드 확장 함수"""
-    try:
-        model = ChatGoogleGenerativeAI(
-            model=llm_model,
-            temperature=0.1,
-        )
-
-        prompt = f"""
-        다음 질문에서 중요한 키워드들을 추출하고 관련 키워드들로 확장해주세요:
-        
-        질문: {question}
-        
-        요구사항:
-        1. 핵심 키워드 5-8개를 추출
-        2. 각 키워드의 유사어, 동의어, 관련어도 포함
-        3. 띄어쓰기 변형도 고려
-        4. 쉼표로 구분하여 답변
-        
-        키워드가 담임수당일 때 출력 예시: 담임 수당, 담임교사 수당, 수당, 급여
-        """
-
-        response = model.invoke(prompt)
-        keywords = [k.strip() for k in str(response.content).split(",")]
-        return keywords[:8]
-
-    except Exception as e:
-        print(f"Gemini 키워드 확장 오류: {e}")
-        return []
-
-
-def extract_basic_keywords(question: str) -> List[str]:
-    """기본 키워드 추출 함수 (폴백용)"""
-    # 불용어 제거
-    stopwords = {
-        "은",
-        "는",
-        "이",
-        "가",
-        "을",
-        "를",
-        "에",
-        "에서",
-        "의",
-        "로",
-        "으로",
-        "와",
-        "과",
-        "하다",
-        "있다",
-        "없다",
-    }
-
-    # 단어 분리 (간단한 방식)
-    words = re.findall(r"\b\w+\b", question)
-    keywords = [word for word in words if word not in stopwords and len(word) > 1]
-
-    return keywords[:5]
-
-
-def keyword_text_search(db, question: str) -> List[Tuple]:
-    """키워드 기반 텍스트 검색 (벡터 검색의 대안)"""
-
-    keywords = extract_keywords(question)
-    if not keywords:
-        return []
-
-    # 모든 문서를 가져와서 텍스트 매칭
-    try:
-        all_docs = db.similarity_search("", k=1000)  # 모든 문서 가져오기
-
-        matching_docs = []
-        for doc in all_docs:
-            content = doc.page_content.lower()
-            question_lower = question.lower()
-
-            # 정확한 매칭 점수 계산
-            score = 0
-            for keyword in keywords:
-                keyword_lower = keyword.lower()
-                if keyword_lower in content:
-                    # 키워드가 포함된 횟수에 따라 점수 증가
-                    count = content.count(keyword_lower)
-                    score += count * len(keyword)
-
-            # 원본 질문과의 유사성도 고려
-            if any(word in content for word in question_lower.split()):
-                score += 10
-
-            if score > 0:
-                # 점수를 유사도처럼 변환 (높을수록 좋음)
-                similarity_score = min(0.95, score / 100)
-                matching_docs.append(
-                    (doc, 1 - similarity_score)
-                )  # FAISS는 거리 기반이므로 역변환
-
-        # 점수순 정렬
-        matching_docs.sort(key=lambda x: x[1])
-
-        return matching_docs
-
-    except Exception as e:
-        print(f"키워드 검색 중 오류: {e}")
-        return []
+    return question.strip()
 
 
 def analyze_search_results(
@@ -311,54 +175,6 @@ def check_vector_db_quality():
         st.error(f"벡터DB 체크 중 오류 발생: {e}")
 
 
-def test_keyword_search(keyword: str):
-    """특정 키워드로 검색 테스트"""
-    if not os.path.exists("faiss_index"):
-        st.error("벡터DB가 존재하지 않습니다.")
-        return
-
-    try:
-        # embeddings = GoogleGenerativeAIEmbeddings(model=embedding_model)
-        embeddings = OpenAIEmbeddings(model=embedding_model)
-        db = FAISS.load_local(
-            "faiss_index", embeddings, allow_dangerous_deserialization=True
-        )
-
-        st.write(f"**'{keyword}' 검색 결과:**")
-
-        # 1. 벡터 검색
-        vector_results = db.similarity_search_with_score(keyword, k=5)
-        st.write(f"벡터 검색 결과: {len(vector_results)}개")
-
-        for i, (doc, score) in enumerate(vector_results):
-            with st.expander(f"벡터 검색 {i+1} (점수: {score:.3f})"):
-                st.write(f"**출처:** {doc.metadata.get('source', 'Unknown')}")
-                # 키워드가 포함된 부분 하이라이트
-                content = doc.page_content
-                if keyword in content:
-                    highlighted = content.replace(keyword, f"**{keyword}**")
-                    st.markdown(highlighted)
-                else:
-                    st.write(content[:300] + "...")
-
-        # 2. 키워드 텍스트 검색
-        text_results = keyword_text_search(db, keyword)
-        st.write(f"텍스트 검색 결과: {len(text_results)}개")
-
-        for i, (doc, score) in enumerate(text_results[:5]):
-            with st.expander(f"텍스트 검색 {i+1} (점수: {score:.3f})"):
-                st.write(f"**출처:** {doc.metadata.get('source', 'Unknown')}")
-                content = doc.page_content
-                if keyword in content:
-                    highlighted = content.replace(keyword, f"**{keyword}**")
-                    st.markdown(highlighted)
-                else:
-                    st.write(content[:300] + "...")
-
-    except Exception as e:
-        st.error(f"검색 테스트 중 오류: {e}")
-
-
 def clear_chat_history():
     """채팅 기록을 지우는 함수"""
     st.session_state.messages = [
@@ -400,12 +216,6 @@ def user_input(user_question: str) -> ResponseDict:
             processed_results = new_db.similarity_search_with_score(user_question, k=5)
             search_results.extend(processed_results)
 
-        # 3. 키워드 추출 검색
-        keywords = extract_keywords(user_question)
-        for keyword in keywords:
-            keyword_results = new_db.similarity_search_with_score(keyword, k=3)
-            search_results.extend(keyword_results)
-
         # 중복 제거 및 점수로 정렬
         unique_results = {}
         for doc, score in search_results:
@@ -420,13 +230,6 @@ def user_input(user_question: str) -> ResponseDict:
         relevant_docs = analyze_search_results(
             user_question, similar_docs, similarity_threshold
         )
-
-        # 관련성이 높은 문서가 없으면 키워드 기반 텍스트 검색 시도
-        if not relevant_docs:
-            text_search_results = keyword_text_search(new_db, user_question)
-            if text_search_results:
-                st.info("💡 키워드 기반 검색으로 관련 문서를 찾았습니다.")
-                relevant_docs = text_search_results[:3]  # 상위 3개만 사용
 
         # 여전히 관련 문서가 없으면 조기 반환
         if not relevant_docs:
@@ -480,18 +283,6 @@ def add_debug_sidebar():
         if debug_mode:
             st.write("---")
 
-            # AI 키워드 확장 테스트
-            st.write("**🤖 AI 키워드 확장 테스트:**")
-            test_question = st.text_input(
-                "테스트할 질문 입력", placeholder="예: 담임수당을 받을 수 있나요?"
-            )
-            if st.button("AI 키워드 확장 테스트") and test_question:
-                with st.spinner("AI가 키워드를 분석 중..."):
-                    expanded = get_expanded_keywords_with_gemini(test_question)
-                    st.write(f"**확장된 키워드:** {', '.join(expanded)}")
-
-            st.write("---")
-
             # 벡터DB 품질 체크 버튼
             if st.button("벡터DB 품질 체크"):
                 check_vector_db_quality()
@@ -507,20 +298,11 @@ def add_debug_sidebar():
                 help="이 값보다 낮은 유사도의 문서는 관련성이 낮다고 판단됩니다.",
             )
 
-            # 특정 키워드로 직접 검색 테스트
-            st.write("**직접 검색 테스트:**")
-            test_keyword = st.text_input(
-                "테스트할 키워드 입력", placeholder="예: 담임수당"
-            )
-            if st.button("키워드 검색 테스트") and test_keyword:
-                test_keyword_search(test_keyword)
-
             # 검색 설정
             st.write("**검색 설정:**")
             st.write(f"- 유사도 임계값: {similarity_threshold}")
             st.write(f"- 검색할 문서 수: 8개")
             st.write(f"- 모델 온도: 0.3")
-            st.write(f"- AI 키워드 확장: ✅ 활성화")
             st.write(f"- 다중 검색 전략: ✅ 활성화")
 
         return debug_mode
