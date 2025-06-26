@@ -275,37 +275,73 @@ def user_input(user_question: str) -> ResponseDict:
 def add_debug_sidebar():
     """디버그 모드 사이드바 추가"""
     with st.sidebar:
-        st.header("🔧 디버그 모드")
+        st.header("📚 학습된 문서 목록")
+        st.markdown(
+            """
+            - 2024년 교육공무직원 노무관리 길라잡이 사례편
+            - 2024년 교육공무직원 노무관리 길라잡이 해설편
+            - 2025 경북형 늘봄학교 추진 계획(안내용)
+            - 2025 늘봄학교 운영길라잡이(개정판)-초등학교편
+            - 2025 늘봄학교 참여 학생 귀가 안전관리 강화 방안(안내용)
+            - 2025년 경상북도교육감 소속 교육공무직원(늘봄행정실무사) 채용 공고
+            - 2025년 교육공무직원 맞춤형복지제도 운영 계획
+            - 2025년 늘봄·방과후학교 자유수강권 지원 요령
+            - 2025년 늘봄학교 및 늘봄지원실장(임기제 교육연구사) 배치·운영 관련 Q&A
+            - 2025년 초중고 학생 교육비 지원 안내 지침
+            - 2025학년도 구미교육지원청 방과후학교(선택형 교육 프로그램) 운영 계획
+            - 경상북도교육비특별회계 목적사업비 관리 운용지침
+            - 늘봄지원실장(임기제 교육연구사) 급여 관련 처리 사항
+        """
+        )
+        # 디버그 모드 토글을 먼저 배치하여 문서 목록 표시 여부를 결정
+        # debug_mode = st.checkbox("디버그 모드 활성화", key="debug_mode")
 
-        # 디버그 모드 토글
-        debug_mode = st.checkbox("디버그 모드 활성화", key="debug_mode")
+        # if not debug_mode:
+        # st.header("📚 학습된 문서 목록")
+        # st.markdown(
+        #     """
+        #     - 2024년 교육공무직원 노무관리 길라잡이 사례편
+        #     - 2024년 교육공무직원 노무관리 길라잡이 해설편
+        #     - 2025 경북형 늘봄학교 추진 계획(안내용)
+        #     - 2025 늘봄학교 운영길라잡이(개정판)-초등학교편
+        #     - 2025 늘봄학교 참여 학생 귀가 안전관리 강화 방안(안내용)
+        #     - 2025년 경상북도교육감 소속 교육공무직원(늘봄행정실무사) 채용 공고
+        #     - 2025년 교육공무직원 맞춤형복지제도 운영 계획
+        #     - 2025년 늘봄·방과후학교 자유수강권 지원 요령
+        #     - 2025년 늘봄학교 및 늘봄지원실장(임기제 교육연구사) 배치·운영 관련 Q&A
+        #     - 2025년 초중고 학생 교육비 지원 안내 지침
+        #     - 2025학년도 구미교육지원청 방과후학교(선택형 교육 프로그램) 운영 계획
+        #     - 경상북도교육비특별회계 목적사업비 관리 운용지침
+        #     - 늘봄지원실장(임기제 교육연구사) 급여 관련 처리 사항
+        # """
+        # )
 
-        if debug_mode:
-            st.write("---")
+        # if debug_mode:
+        #     st.write("---")
 
-            # 벡터DB 품질 체크 버튼
-            if st.button("벡터DB 품질 체크"):
-                check_vector_db_quality()
+        #     # 벡터DB 품질 체크 버튼
+        #     if st.button("벡터DB 품질 체크"):
+        #         check_vector_db_quality()
 
-            # 유사도 임계값 설정
-            similarity_threshold = st.slider(
-                "유사도 임계값",
-                min_value=0.0,
-                max_value=1.0,
-                value=0.5,  # 기본값을 0.5로 낮춤
-                step=0.1,
-                key="similarity_threshold",
-                help="이 값보다 낮은 유사도의 문서는 관련성이 낮다고 판단됩니다.",
-            )
+        #     # 유사도 임계값 설정
+        #     similarity_threshold = st.slider(
+        #         "유사도 임계값",
+        #         min_value=0.0,
+        #         max_value=1.0,
+        #         value=0.5,  # 기본값을 0.5로 낮춤
+        #         step=0.1,
+        #         key="similarity_threshold",
+        #         help="이 값보다 낮은 유사도의 문서는 관련성이 낮다고 판단됩니다.",
+        #     )
 
-            # 검색 설정
-            st.write("**검색 설정:**")
-            st.write(f"- 유사도 임계값: {similarity_threshold}")
-            st.write(f"- 검색할 문서 수: 8개")
-            st.write(f"- 모델 온도: 0.3")
-            st.write(f"- 다중 검색 전략: ✅ 활성화")
+        #     # 검색 설정
+        #     st.write("**검색 설정:**")
+        #     st.write(f"- 유사도 임계값: {similarity_threshold}")
+        #     st.write(f"- 검색할 문서 수: 8개")
+        #     st.write(f"- 모델 온도: 0.3")
+        #     st.write(f"- 다중 검색 전략: ✅ 활성화")
 
-        return debug_mode
+        # return debug_mode
 
 
 def main():
