@@ -9,11 +9,21 @@ from langchain_openai import OpenAIEmbeddings
 from langchain.prompts import PromptTemplate
 from dotenv import load_dotenv
 from typing import List, TypedDict, Tuple
+import base64
 
 from langchain.chains.retrieval import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 
 load_dotenv()
+
+
+def get_image_base64(image_path):
+    if not os.path.exists(image_path):
+        print(f"Error: Image file not found at {image_path}")
+        return ""
+    with open(image_path, "rb") as img_file:
+        return base64.b64encode(img_file.read()).decode("utf-8")
+
 
 llm_model = "gemini-2.5-flash"
 embedding_model = "text-embedding-3-large"
@@ -354,19 +364,16 @@ def main():
     debug_mode = add_debug_sidebar()
 
     # 메인 헤더
-    col1, col2 = st.columns([1, 8])
-    with col1:
-        if os.path.exists("nb_small.png"):
-            st.image("nb_small.png", use_container_width=True, width=80)
-    with col2:
-        st.markdown(
-            """
-            <div style="display:flex; align-items:center; height:54px;">
-                <span style="font-size:2.2em; font-weight:bold; height:54px;">늘봄학교 챗봇</span>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+    image_base64 = get_image_base64("nb_small.png")
+    st.markdown(
+        f"""
+        <div style="display:flex; align-items:center; gap:10px; height:54px;margin-bottom:15px;">
+            <img src="data:image/png;base64,{image_base64}" width="80" style="height:auto;"/>
+            <span style="font-size:2.2em; font-weight:bold;">늘봄학교 챗봇</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     st.write("문의사항: 포항원동초등학교 교사 김지원")
 
