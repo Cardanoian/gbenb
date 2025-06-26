@@ -357,12 +357,12 @@ def main():
     col1, col2 = st.columns([1, 8])
     with col1:
         if os.path.exists("nb_small.png"):
-            st.image("nb_small.png", use_container_width=True)
+            st.image("nb_small.png", use_container_width=True, width=80)
     with col2:
         st.markdown(
             """
             <div style="display:flex; align-items:center; height:54px;">
-                <span style="font-size:2.2em; font-weight:bold; height:54px;">늘봄학교 운영 도우미 챗봇</span>
+                <span style="font-size:2.2em; font-weight:bold; height:54px;">늘봄학교 챗봇</span>
             </div>
             """,
             unsafe_allow_html=True,
