@@ -347,7 +347,7 @@ def add_debug_sidebar():
 def main():
     """메인 애플리케이션 함수"""
     st.set_page_config(
-        page_title="늘봄학교 운영 도우미 챗봇", page_icon="nb_small.png", layout="wide"
+        page_title="늘봄학교 챗봇", page_icon="nb_small.png", layout="wide"
     )
 
     # 디버그 사이드바 추가
@@ -368,7 +368,7 @@ def main():
             unsafe_allow_html=True,
         )
 
-    st.write("문의사항 및 오류보고: 포항원동초등학교 교사 김지원")
+    st.write("문의사항: 포항원동초등학교 교사 김지원")
 
     # 디버그 모드 표시
     if debug_mode:
