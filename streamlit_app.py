@@ -3,18 +3,24 @@
 import os
 import re
 import streamlit as st
-from langchain_community.vectorstores import FAISS
-from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
-from langchain_openai import OpenAIEmbeddings
-from langchain.prompts import PromptTemplate
 from dotenv import load_dotenv
 from typing import List, TypedDict, Tuple
 import base64
-
-from langchain.chains.retrieval import create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
+import chromadb
+from chromadb import Documents, EmbeddingFunction, Embeddings
+from google import genai
+from google.genai import types
 
 load_dotenv()
+
+llm_model = "gemini-2.5-flash"
+embedding_model = "models/gemini-embedding-001"
+
+# Gemini API 클라이언트 초기화
+api_key = os.getenv("GEMINI_API_KEY")
+if not api_key:
+    raise ValueError("GEMINI_API_KEY 환경 변수가 설정되지 않았습니다.")
+client = genai.Client(api_key=api_key)
 
 
 def get_image_base64(image_path):
@@ -25,8 +31,40 @@ def get_image_base64(image_path):
         return base64.b64encode(img_file.read()).decode("utf-8")
 
 
-llm_model = "gemini-2.5-flash"
-embedding_model = "text-embedding-3-large"
+class GeminiDocumentEmbeddingFunction(EmbeddingFunction):
+    """문서 임베딩용 Gemini EmbeddingFunction (RETRIEVAL_DOCUMENT)"""
+
+    def __init__(self):
+        self.client = client
+        self.model = embedding_model
+
+    def __call__(self, input: Documents) -> Embeddings:
+        response = self.client.models.embed_content(
+            model=self.model,
+            contents=input,
+            config=types.EmbedContentConfig(
+                task_type="retrieval_document",
+            ),
+        )
+        return response.embeddings[0].values
+
+
+class GeminiQueryEmbeddingFunction(EmbeddingFunction):
+    """쿼리 임베딩용 Gemini EmbeddingFunction (RETRIEVAL_QUERY)"""
+
+    def __init__(self):
+        self.client = client
+        self.model = embedding_model
+
+    def __call__(self, input: Documents) -> Embeddings:
+        response = self.client.models.embed_content(
+            model=self.model,
+            contents=input,
+            config=types.EmbedContentConfig(
+                task_type="retrieval_query",
+            ),
+        )
+        return response.embeddings[0].values
 
 
 class ContextDocument(TypedDict):
@@ -39,8 +77,8 @@ class ResponseDict(TypedDict):
     source_documents: List[ContextDocument]
 
 
-def get_conversational_chain():
-    """개선된 프롬프트 템플릿을 사용하는 체인 생성"""
+def get_conversational_response(user_question: str, context_docs: List[str]) -> str:
+    """컨텍스트와 질문을 바탕으로 답변 생성"""
     prompt_template = """당신은 초등학교 돌봄교실, 방과후교실, 늘봄교실 운영에 관한 전문가입니다.
 
 **중요한 지침:**
@@ -62,18 +100,24 @@ def get_conversational_chain():
 
 답변:"""
 
-    model = ChatGoogleGenerativeAI(
+    # 컨텍스트 결합
+    context = "\n\n".join(
+        [f"[문서 {i+1}]\n{doc}" for i, doc in enumerate(context_docs)]
+    )
+
+    # 프롬프트 생성
+    prompt = prompt_template.format(context=context, input=user_question)
+
+    # Gemini API 호출
+    response = client.models.generate_content(
         model=llm_model,
-        temperature=0.3,  # 더 일관된 답변을 위해 낮춤
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            temperature=0.3,
+        ),
     )
 
-    prompt = PromptTemplate(
-        template=prompt_template,
-        input_variables=["context", "input"],
-    )
-
-    stuff_documents_chain = create_stuff_documents_chain(model, prompt)
-    return stuff_documents_chain
+    return response.text if response.text else ""
 
 
 def preprocess_question(question: str) -> str:
@@ -99,28 +143,30 @@ def analyze_search_results(
 ):
     """검색 결과를 분석하여 관련성을 평가하는 함수"""
 
+    # ChromaDB는 거리(distance)를 반환하므로, 유사도 점수로 변환
+    # 거리가 작을수록 유사도가 높으므로, 1 / (1 + distance)로 변환
+    def distance_to_similarity(distance: float) -> float:
+        return 1 / (1 + distance)
+
     if st.session_state.get("debug_mode", False):
         st.write(f"**검색 분석 결과**")
         st.write(f"질문: {user_question}")
         st.write(f"검색된 문서 수: {len(similar_docs)}")
 
         relevant_docs = []
-        for i, (doc, score) in enumerate(similar_docs):
-            with st.expander(f"문서 {i+1} (점수: {score:.3f})"):
-                st.write(f"**출처:** {doc.metadata.get('source', 'Unknown')}")
-                st.write(f"**내용 길이:** {len(doc.page_content)}")
+        for i, (doc_text, metadata, distance) in enumerate(similar_docs):
+            similarity = distance_to_similarity(distance)
+            with st.expander(f"문서 {i+1} (유사도: {similarity:.3f})"):
+                st.write(f"**출처:** {metadata.get('source', 'Unknown')}")
+                st.write(f"**내용 길이:** {len(doc_text)}")
                 st.write(
-                    f"**관련성:** {'높음 ✅' if score >= threshold else '낮음 ❌'}"
+                    f"**관련성:** {'높음 ✅' if similarity >= threshold else '낮음 ❌'}"
                 )
                 st.write(f"**내용 미리보기:**")
-                st.text(
-                    doc.page_content[:300] + "..."
-                    if len(doc.page_content) > 300
-                    else doc.page_content
-                )
+                st.text(doc_text[:300] + "..." if len(doc_text) > 300 else doc_text)
 
-            if score >= threshold:
-                relevant_docs.append((doc, score))
+            if similarity >= threshold:
+                relevant_docs.append((doc_text, metadata, distance))
 
         st.write(f"관련성 높은 문서 수: {len(relevant_docs)}")
         return relevant_docs
@@ -130,15 +176,16 @@ def analyze_search_results(
     print(f"검색된 문서 수: {len(similar_docs)}")
 
     relevant_docs = []
-    for i, (doc, score) in enumerate(similar_docs):
+    for i, (doc_text, metadata, distance) in enumerate(similar_docs):
+        similarity = distance_to_similarity(distance)
         print(f"\n문서 {i+1}:")
-        print(f"  점수: {score:.3f}")
-        print(f"  출처: {doc.metadata.get('source', 'Unknown')}")
-        print(f"  내용 길이: {len(doc.page_content)}")
-        print(f"  내용 미리보기: {doc.page_content[:150]}...")
+        print(f"  유사도: {similarity:.3f} (거리: {distance:.3f})")
+        print(f"  출처: {metadata.get('source', 'Unknown')}")
+        print(f"  내용 길이: {len(doc_text)}")
+        print(f"  내용 미리보기: {doc_text[:150]}...")
 
-        if score >= threshold:
-            relevant_docs.append((doc, score))
+        if similarity >= threshold:
+            relevant_docs.append((doc_text, metadata, distance))
             print("  ✅ 관련성 높음")
         else:
             print("  ❌ 관련성 낮음")
@@ -150,36 +197,46 @@ def analyze_search_results(
 def check_vector_db_quality():
     """벡터 DB의 품질을 체크하는 함수"""
 
-    if not os.path.exists("faiss_index"):
+    if not os.path.exists("chroma_db"):
         st.error("벡터DB가 존재하지 않습니다.")
         return
 
     try:
-        # embeddings = GoogleGenerativeAIEmbeddings(model=embedding_model)
-        embeddings = OpenAIEmbeddings(model=embedding_model)
-        db = FAISS.load_local(
-            "faiss_index", embeddings, allow_dangerous_deserialization=True
-        )
+        chroma_client = chromadb.PersistentClient(path="chroma_db")
+        collection_name = "pdf_documents"
+
+        try:
+            collection = chroma_client.get_collection(
+                name=collection_name,
+                embedding_function=GeminiDocumentEmbeddingFunction(),
+            )
+        except:
+            st.error("ChromaDB 컬렉션을 찾을 수 없습니다.")
+            return
 
         # 벡터 DB 통계
-        total_docs = db.index.ntotal
+        total_docs = collection.count()
         st.success(f"벡터DB 로드 성공!")
         st.write(f"**총 문서 수:** {total_docs}")
 
         # 샘플 문서들 확인
         if total_docs > 0:
-            sample_docs = db.similarity_search("", k=min(5, total_docs))
+            sample_results = collection.get(limit=min(5, total_docs))
             st.write("**샘플 문서들:**")
-            for i, doc in enumerate(sample_docs):
+            for i, (doc_id, doc_text, metadata) in enumerate(
+                zip(
+                    sample_results["ids"],
+                    sample_results["documents"],
+                    sample_results["metadatas"],
+                )
+            ):
                 with st.expander(f"샘플 문서 {i+1}"):
-                    st.write(f"**출처:** {doc.metadata.get('source', 'Unknown')}")
-                    st.write(f"**길이:** {len(doc.page_content)}")
-                    st.write(f"**내용:**")
-                    st.text(
-                        doc.page_content[:200] + "..."
-                        if len(doc.page_content) > 200
-                        else doc.page_content
+                    st.write(
+                        f"**출처:** {metadata.get('source', 'Unknown') if metadata else 'Unknown'}"
                     )
+                    st.write(f"**길이:** {len(doc_text)}")
+                    st.write(f"**내용:**")
+                    st.text(doc_text[:200] + "..." if len(doc_text) > 200 else doc_text)
 
     except Exception as e:
         st.error(f"벡터DB 체크 중 오류 발생: {e}")
@@ -194,47 +251,65 @@ def clear_chat_history():
 
 def user_input(user_question: str) -> ResponseDict:
     """개선된 사용자 입력 처리 함수"""
-    # embeddings = GoogleGenerativeAIEmbeddings(model=embedding_model)
-    embeddings = OpenAIEmbeddings(model=embedding_model)
-
-    if not os.path.exists("faiss_index"):
+    if not os.path.exists("chroma_db"):
         st.error("벡터DB가 존재하지 않습니다.")
         return {"output_text": "벡터DB가 존재하지 않습니다.", "source_documents": []}
 
     try:
-        new_db = FAISS.load_local(
-            "faiss_index", embeddings, allow_dangerous_deserialization=True
+        # ChromaDB 클라이언트 생성
+        chroma_client = chromadb.PersistentClient(path="chroma_db")
+        collection_name = "pdf_documents"
+
+        try:
+            # 문서 검색용 컬렉션 (RETRIEVAL_DOCUMENT 임베딩 사용)
+            doc_collection = chroma_client.get_collection(
+                name=collection_name,
+                embedding_function=GeminiDocumentEmbeddingFunction(),
+            )
+        except:
+            st.error("ChromaDB 컬렉션을 찾을 수 없습니다.")
+            return {
+                "output_text": "ChromaDB 컬렉션을 찾을 수 없습니다.",
+                "source_documents": [],
+            }
+
+        # 쿼리 임베딩 생성 (RETRIEVAL_QUERY 사용)
+        query_embedding_func = GeminiQueryEmbeddingFunction()
+        # Embeddings는 리스트의 리스트이므로, 첫 번째 문서의 임베딩을 가져옴
+        query_embeddings_result = query_embedding_func([user_question])
+        # query_embeddings는 리스트의 리스트 형식이어야 함
+        query_embedding = (
+            query_embeddings_result[0]
+            if isinstance(query_embeddings_result[0], list)
+            else query_embeddings_result
         )
 
-        # 유사도 임계값 가져오기 (사이드바에서 설정)
-        similarity_threshold = st.session_state.get(
-            "similarity_threshold", 0.5
-        )  # 기본값을 0.5로 낮춤
+        # 유사도 임계값 가져오기
+        similarity_threshold = st.session_state.get("similarity_threshold", 0.5)
 
-        # 질문 전처리
-        # user_question = preprocess_question(user_question)
+        # ChromaDB에서 유사 문서 검색
+        # query_embeddings는 리스트의 리스트 형식이어야 함
+        results = doc_collection.query(
+            query_embeddings=[query_embedding],
+            n_results=8,
+        )
 
-        # 다중 검색 전략 적용
-        search_results = []
-
-        # 1. 원본 질문으로 검색
-        original_results = new_db.similarity_search_with_score(user_question, k=5)
-        search_results.extend(original_results)
-
-        # 2. 전처리된 질문으로 검색
-        if user_question != user_question:
-            processed_results = new_db.similarity_search_with_score(user_question, k=5)
-            search_results.extend(processed_results)
-
-        # 중복 제거 및 점수로 정렬
-        unique_results = {}
-        for doc, score in search_results:
-            doc_id = f"{doc.metadata.get('source', '')}_{hash(doc.page_content)}"
-            if doc_id not in unique_results or unique_results[doc_id][1] > score:
-                unique_results[doc_id] = (doc, score)
-
-        # 점수순 정렬
-        similar_docs = sorted(unique_results.values(), key=lambda x: x[1])[:8]
+        # 검색 결과를 (문서, 메타데이터, 거리) 튜플 리스트로 변환
+        similar_docs = []
+        if results["documents"] and len(results["documents"][0]) > 0:
+            for i in range(len(results["documents"][0])):
+                doc_text = results["documents"][0][i]
+                metadata = (
+                    results["metadatas"][0][i]
+                    if results["metadatas"] and results["metadatas"][0]
+                    else {}
+                )
+                distance = (
+                    results["distances"][0][i]
+                    if results["distances"] and results["distances"][0]
+                    else 1.0
+                )
+                similar_docs.append((doc_text, metadata, distance))
 
         # 검색 결과 분석
         relevant_docs = analyze_search_results(
@@ -248,37 +323,30 @@ def user_input(user_question: str) -> ResponseDict:
                 "source_documents": [],
             }
 
-        # retriever 설정 개선
-        retriever = new_db.as_retriever(
-            search_type="similarity",
-            search_kwargs={
-                "k": 8,
-            },
-        )
+        # 관련 문서 추출
+        context_docs = [doc_text for doc_text, _, _ in relevant_docs]
 
-        # RAG 체인 실행
-        document_chain = get_conversational_chain()
-        retrieval_chain = create_retrieval_chain(retriever, document_chain)
-
-        response = retrieval_chain.invoke({"input": user_question})
+        # RAG 응답 생성
+        response_text = get_conversational_response(user_question, context_docs)
 
         # 참고 문서 정보 수집
         source_info: List[ContextDocument] = []
-        for doc in response["context"]:
-            if "source" in doc.metadata:
+        for doc_text, metadata, _ in relevant_docs:
+            if metadata and "source" in metadata:
                 source_info.append(
                     {
-                        "source": doc.metadata["source"],
-                        "content": doc.page_content,
+                        "source": metadata["source"],
+                        "content": doc_text,
                     }
                 )
-
-        response_text: str = response["answer"]
 
         return {"output_text": response_text, "source_documents": source_info}
 
     except Exception as e:
         st.error(f"답변 생성 중 오류 발생: {e}")
+        import traceback
+
+        print(traceback.format_exc())
         return {"output_text": f"오류가 발생했습니다: {e}", "source_documents": []}
 
 
@@ -303,55 +371,8 @@ def add_debug_sidebar():
             - 늘봄지원실장(임기제 교육연구사) 급여 관련 처리 사항
         """
         )
-        # 디버그 모드 토글을 먼저 배치하여 문서 목록 표시 여부를 결정
-        # debug_mode = st.checkbox("디버그 모드 활성화", key="debug_mode")
 
-        # if not debug_mode:
-        # st.header("📚 학습된 문서 목록")
-        # st.markdown(
-        #     """
-        #     - 2024년 교육공무직원 노무관리 길라잡이 사례편
-        #     - 2024년 교육공무직원 노무관리 길라잡이 해설편
-        #     - 2025 경북형 늘봄학교 추진 계획(안내용)
-        #     - 2025 늘봄학교 운영길라잡이(개정판)-초등학교편
-        #     - 2025 늘봄학교 참여 학생 귀가 안전관리 강화 방안(안내용)
-        #     - 2025년 경상북도교육감 소속 교육공무직원(늘봄행정실무사) 채용 공고
-        #     - 2025년 교육공무직원 맞춤형복지제도 운영 계획
-        #     - 2025년 늘봄·방과후학교 자유수강권 지원 요령
-        #     - 2025년 늘봄학교 및 늘봄지원실장(임기제 교육연구사) 배치·운영 관련 Q&A
-        #     - 2025년 초중고 학생 교육비 지원 안내 지침
-        #     - 2025학년도 구미교육지원청 방과후학교(선택형 교육 프로그램) 운영 계획
-        #     - 경상북도교육비특별회계 목적사업비 관리 운용지침
-        #     - 늘봄지원실장(임기제 교육연구사) 급여 관련 처리 사항
-        # """
-        # )
-
-        # if debug_mode:
-        #     st.write("---")
-
-        #     # 벡터DB 품질 체크 버튼
-        #     if st.button("벡터DB 품질 체크"):
-        #         check_vector_db_quality()
-
-        #     # 유사도 임계값 설정
-        #     similarity_threshold = st.slider(
-        #         "유사도 임계값",
-        #         min_value=0.0,
-        #         max_value=1.0,
-        #         value=0.5,  # 기본값을 0.5로 낮춤
-        #         step=0.1,
-        #         key="similarity_threshold",
-        #         help="이 값보다 낮은 유사도의 문서는 관련성이 낮다고 판단됩니다.",
-        #     )
-
-        #     # 검색 설정
-        #     st.write("**검색 설정:**")
-        #     st.write(f"- 유사도 임계값: {similarity_threshold}")
-        #     st.write(f"- 검색할 문서 수: 8개")
-        #     st.write(f"- 모델 온도: 0.3")
-        #     st.write(f"- 다중 검색 전략: ✅ 활성화")
-
-        # return debug_mode
+    return False  # 디버그 모드 비활성화
 
 
 def main():
